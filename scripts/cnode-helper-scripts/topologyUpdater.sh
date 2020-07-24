@@ -1,11 +1,14 @@
 #!/bin/bash
 # shellcheck disable=SC2086,SC2034
 
+# get common env variables
+. "$(dirname $0)"/env
+
 USERNAME="${USERNAME}" # replace nonroot with your username
 CNODE_PORT=6000  # must match your relay node port as set in the startup command
 CNODE_HOSTNAME="CHANGE ME"  # optional. must resolve to the IP you are requesting from
+CNODE_VALENCY=1   # optional for multi-IP hostnames
 
-CNODE_BIN="${HOME}/.cabal/bin"
 CNODE_HOME="/opt/cardano/cnode"
 CNODE_LOG_DIR="${CNODE_HOME}/logs/"
 CONFIG="$CNODE_HOME/files/ptn0.json"
@@ -15,12 +18,11 @@ PROTOCOL=$(grep -E '^.{0,1}Protocol.{0,1}:' "$CONFIG" | tr -d '"' | tr -d ',' | 
 if [[ "${PROTOCOL}" = "Cardano" ]]; then
   PROTOCOL_IDENTIFIER="--cardano-mode"
 fi
-CNODE_VALENCY=1   # optional for multi-IP hostnames
+
 NWMAGIC=$(jq -r .networkMagic < $GENESIS_JSON)
 [[ "${NETWORKID}" = "Mainnet" ]] && HASH_IDENTIFIER="--mainnet" || HASH_IDENTIFIER="--testnet-magic ${NWMAGIC}"
 [[ "${NWMAGIC}" = "764824073" ]] && NETWORK_IDENTIFIER="--mainnet" || NETWORK_IDENTIFIER="--testnet-magic ${NWMAGIC}"
 
-export PATH="${CNODE_BIN}:${PATH}"
 export CARDANO_NODE_SOCKET_PATH="${CNODE_HOME}/sockets/node0.socket"
 
 blockNo=$(cardano-cli shelley query tip ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} | jq -r .blockNo )
