@@ -59,7 +59,7 @@ if [ "$INTERACTIVE" = 'Y' ]; then
   CNODE_VNAME=$(echo "$CNODE_NAME" | awk '{print toupper($0)}')
 
   if [ -d "${CNODE_HOME}" ]; then
-    err_exit "The \"${CNODE_HOME}\" directory exist, pls remove or choose an other one."
+    echo "The \"${CNODE_HOME}\" directory exist."
   fi
 
 fi
