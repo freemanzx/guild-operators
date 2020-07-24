@@ -2613,6 +2613,22 @@ case $OPERATION in
       fi
     else
       say "${GREEN}Up to Date${NC}: You're using the latest version. No updates required!"
+      say "Would you like to foce the upgrade?\n"
+      case $(select_opt "[y] Yes" "[n] No") in
+        0)  if wget -q -T 10 -O "$CNODE_HOME/scripts/cntools.sh" "$URL/cntools.sh" &&
+               wget -q -T 10 -O "$CNODE_HOME/scripts/cntools.library" "$URL/cntools.library" &&
+               wget -q -T 10 -O "$CNODE_HOME/scripts/env" "$URL/env" &&
+               wget -q -T 10 -O "$CNODE_HOME/scripts/cntoolsBlockCollector.sh" "$URL/cntoolsBlockCollector.sh" &&
+               wget -q -T 10 -O "$CNODE_HOME/scripts/topologyUpdater.sh" "$URL/topologyUpdater.sh"; then
+              chmod 750 "$CNODE_HOME/scripts/"*.sh
+              chmod 640 "$CNODE_HOME/scripts/cntools.library" "$CNODE_HOME/scripts/cntools.config" "$CNODE_HOME/scripts/env"
+              say "\nUpdate applied successfully! Please start CNTools again !\n"
+              exit
+            else
+              say "\n${RED}ERROR${NC}: update unsuccessful, GitHub download failed!\n"
+            fi ;;
+        1) say "upgrade canceled" ;;
+      esac      
     fi
   else
     say "\n${RED}ERROR${NC}: download from GitHub failed, unable to perform version check!\n"
