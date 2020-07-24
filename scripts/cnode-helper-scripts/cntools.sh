@@ -2613,7 +2613,7 @@ case $OPERATION in
       fi
     else
       say "${GREEN}Up to Date${NC}: You're using the latest version. No updates required!"
-      say "${ORANGE}Force Update${NC}: Would you like to force the upgrade?\n"
+      say "${LGRAY}Force Update${NC}: Would you like to force the upgrade?\n"
       case $(select_opt "[y] Yes" "[n] No") in
         0)  if wget -q -T 10 -O "$CNODE_HOME/scripts/cntools.sh" "$URL/cntools.sh" &&
                wget -q -T 10 -O "$CNODE_HOME/scripts/cntools.library" "$URL/cntools.library" &&
