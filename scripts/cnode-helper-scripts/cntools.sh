@@ -25,7 +25,7 @@ fi
 # check to see if there are any updates available
 clear
 say "CNTools version check...\n"
-URL="https://raw.githubusercontent.com/cardano-community/guild-operators/master/scripts/cnode-helper-scripts"
+URL="https://raw.githubusercontent.com/freemanzx/guild-operators/offline-ops/scripts/cnode-helper-scripts"
 if wget -q -T 10 -O "${TMP_FOLDER}"/cntools.library "${URL}/cntools.library"; then
   GIT_MAJOR_VERSION=$(grep -r ^CNTOOLS_MAJOR_VERSION= "${TMP_FOLDER}"/cntools.library |sed -e "s#.*=##")
   GIT_MINOR_VERSION=$(grep -r ^CNTOOLS_MINOR_VERSION= "${TMP_FOLDER}"/cntools.library |sed -e "s#.*=##")
@@ -39,7 +39,7 @@ if wget -q -T 10 -O "${TMP_FOLDER}"/cntools.library "${URL}/cntools.library"; th
     waitForInput "press any key to proceed"
   else
     # check if CNTools was recently updated, if so show whats new
-    URL_DOCS="https://raw.githubusercontent.com/cardano-community/guild-operators/master/docs/Scripts"
+    URL_DOCS="https://raw.githubusercontent.com/freemanzx/guild-operators/offline-ops/docs/Scripts"
     if wget -q -T 10 -O "${TMP_FOLDER}"/cntools-changelog.md "${URL_DOCS}/cntools-changelog.md"; then
       if ! cmp -s "${TMP_FOLDER}"/cntools-changelog.md "$CNODE_HOME/scripts/cntools-changelog.md"; then
         # Latest changes not shown, show whats new and copy changelog
@@ -2572,8 +2572,8 @@ case $OPERATION in
   say "Full changelog available at:\nhttps://cardano-community.github.io/guild-operators/Scripts/cntools-changelog.html"
   say ""
 
-  URL="https://raw.githubusercontent.com/cardano-community/guild-operators/master/scripts/cnode-helper-scripts"
-  URL_DOCS="https://raw.githubusercontent.com/cardano-community/guild-operators/master/docs/Scripts"
+  URL="https://raw.githubusercontent.com/freemanzx/guild-operators/offline-ops/scripts/cnode-helper-scripts"
+  URL_DOCS="https://raw.githubusercontent.com/freemanzx/guild-operators/offline-ops/docs/Scripts"
   if wget -q -T 10 -O "${TMP_FOLDER}"/cntools.library "${URL}/cntools.library"; then
     GIT_MAJOR_VERSION=$(grep -r ^CNTOOLS_MAJOR_VERSION= "${TMP_FOLDER}"/cntools.library |sed -e "s#.*=##")
     GIT_MINOR_VERSION=$(grep -r ^CNTOOLS_MINOR_VERSION= "${TMP_FOLDER}"/cntools.library |sed -e "s#.*=##")
