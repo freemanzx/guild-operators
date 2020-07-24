@@ -2618,8 +2618,7 @@ case $OPERATION in
         0)  if wget -q -T 10 -O "$CNODE_HOME/scripts/cntools.sh" "$URL/cntools.sh" &&
                wget -q -T 10 -O "$CNODE_HOME/scripts/cntools.library" "$URL/cntools.library" &&
                wget -q -T 10 -O "$CNODE_HOME/scripts/env" "$URL/env" &&
-               wget -q -T 10 -O "$CNODE_HOME/scripts/cntoolsBlockCollector.sh" "$URL/cntoolsBlockCollector.sh" &&
-               wget -q -T 10 -O "$CNODE_HOME/scripts/topologyUpdater.sh" "$URL/topologyUpdater.sh"; then
+               wget -q -T 10 -O "$CNODE_HOME/scripts/cntoolsBlockCollector.sh" "$URL/cntoolsBlockCollector.sh"; then
               chmod 750 "$CNODE_HOME/scripts/"*.sh
               chmod 640 "$CNODE_HOME/scripts/cntools.library" "$CNODE_HOME/scripts/cntools.config" "$CNODE_HOME/scripts/env"
               say "\nUpdate applied successfully! Please start CNTools again !\n"
