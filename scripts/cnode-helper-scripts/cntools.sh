@@ -91,13 +91,18 @@ if [[ "${PROTOCOL}" == "Cardano" ]]; then
 fi
 
 # Get protocol parameters and save to ${TMP_FOLDER}/protparams.json
-${CCLI} shelley query protocol-parameters ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/protparams.json 2>/dev/null|| {
-  say "${ORANGE}WARN${NC}: failed to query protocol parameters, ensure your node is running with correct genesis (the node needs to be in sync to 1 epoch after the hardfork)"
-  say "\n${BLUE}Press c to continue or any other key to quit${NC}"
-  say "only offline functions will be available if you continue\n"
-  read -r -n 1 -s -p "" answer
-  [[ "${answer}" != "c" ]] && exit 1
-}
+if [[ -f "${TMP_FOLDER}"/protparams.json ]]; then
+    say "${GREEN}Protocol parameters file found!${NC}"
+    waitForInput
+else 
+  ${CCLI} shelley query protocol-parameters ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/protparams.json 2>/dev/null|| {
+    say "${ORANGE}WARN${NC}: failed to query protocol parameters, ensure your node is running with correct genesis (the node needs to be in sync to 1 epoch after the hardfork)"
+    say "\n${BLUE}Press c to continue or any other key to quit${NC}"
+    say "only offline functions will be available if you continue\n"
+    read -r -n 1 -s -p "" answer
+    [[ "${answer}" != "c" ]] && exit 1
+  }
+fi
 
 # check if there are pools in need of KES key rotation
 clear
