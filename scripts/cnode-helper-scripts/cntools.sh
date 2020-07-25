@@ -90,19 +90,21 @@ if [[ "${PROTOCOL}" == "Cardano" ]]; then
   fi
 fi
 
+SCRIPT_MODE="online"
 # Get protocol parameters and save to ${TMP_FOLDER}/protparams.json
-if [[ -f "${TMP_FOLDER}"/protparams.json ]]; then
+${CCLI} shelley query protocol-parameters ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/protparams.json 2>/dev/null || {
+  SCRIPT_MODE="offline"
+  say "${ORANGE}WARN${NC}: failed to query protocol parameters from network"
+  if [[ -f "${TMP_FOLDER}"/protparams.json ]]; then
     say "${GREEN}Protocol parameters file found!${NC}"
-    waitForInput
-else 
-  ${CCLI} shelley query protocol-parameters ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/protparams.json 2>/dev/null|| {
-    say "${ORANGE}WARN${NC}: failed to query protocol parameters, ensure your node is running with correct genesis (the node needs to be in sync to 1 epoch after the hardfork)"
-    say "\n${BLUE}Press c to continue or any other key to quit${NC}"
-    say "only offline functions will be available if you continue\n"
-    read -r -n 1 -s -p "" answer
-    [[ "${answer}" != "c" ]] && exit 1
-  }
-fi
+  else 
+    say "${RED}ERROR${NC}: Protocol parameters couldn't be obtained, ensure your node is running with correct genesis (the node needs to be in sync to 1 epoch after the hardfork)"
+  fi
+  say "\n${BLUE}Press q to quit or any other key to continue${NC}"
+  say "${ORANGE}WARN${NC}: only offline functions will be available if you continue\n"
+  read -r -n 1 -s -p "" answer
+  [[ "${answer}" == "q" ]] && exit 1
+}
 
 # check if there are pools in need of KES key rotation
 clear
@@ -266,11 +268,11 @@ case $OPERATION in
         getPayAddress ${wallet_name}
       fi
       if [[ -n ${base_addr} ]]; then
-        getBalance ${base_addr}
+        getBalance ${base_addr} ${wallet_name}
         say "$(printf "%s\t\t\t${CYAN}%s${NC} ADA" "Funds"  "$(formatLovelace ${lovelace})")" "log"
       fi
       if [[ -n ${pay_addr} ]]; then
-        getBalance ${pay_addr}
+        getBalance ${pay_addr} ${wallet_name}
         if [[ ${lovelace} -gt 0 ]]; then
           say "$(printf "%s\t${CYAN}%s${NC} ADA" "Enterprise Funds"  "$(formatLovelace ${lovelace})")" "log"
         fi
@@ -343,7 +345,7 @@ case $OPERATION in
       say "$(printf "%-8s ${GREEN}%s${NC}" "Wallet" "${wallet_name}")" "log"
     fi
 
-    getBalance ${base_addr}
+    getBalance ${base_addr} ${wallet_name}
     base_lovelace=${lovelace}
     if [[ ${utx0_count} -gt 0 ]]; then
       say ""
@@ -353,7 +355,7 @@ case $OPERATION in
       [[ ${utx0_count} -gt 10 ]] && say "... (top 10 UTx0 with most lovelace)"
     fi
 
-    getBalance ${pay_addr}
+    getBalance ${pay_addr} ${wallet_name}
     pay_lovelace=${lovelace}
     if [[ ${utx0_count} -gt 0 ]]; then
       say ""

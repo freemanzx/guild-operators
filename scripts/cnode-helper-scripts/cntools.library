@@ -651,7 +651,7 @@ getAddressInfo() {
   address_info=$(${CCLI} shelley address info --address $1)
 }
 
-# Command    : getBalance [address]
+# Command    : getBalance [address] [wallet name](optional)
 # Description: check balance for provided address
 # Return     : populates $lovelace & $utx0_count
 getBalance() {
@@ -659,9 +659,30 @@ getBalance() {
   utx0_count=0
 
   [[ -z $1 ]] && return 1
+  address=$1
 
-  ${CCLI} shelley query utxo ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --address "${1}" > "${TMP_FOLDER}"/fullUtxo.out
-  tail -n +3 "${TMP_FOLDER}"/fullUtxo.out | sort -k3 -nr > "${TMP_FOLDER}"/balance.out
+  # Get fresh UTXO and Balance when in on-line mode
+  if [[ ${SCRIPT_MODE} == "online" ]]; then
+    ${CCLI} shelley query utxo ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --address "${address}" > "${TMP_FOLDER}"/fullUtxo.out
+    tail -n +3 "${TMP_FOLDER}"/fullUtxo.out | sort -k3 -nr > "${TMP_FOLDER}"/balance.out
+    # Store UTXO and Balance in wallet folder if wallet name provided
+    if [[ ! -z $2 ]]; then
+      wallet_name=$2
+      cp "${TMP_FOLDER}"/fullUtxo.out "${WALLET_FOLDER}/${wallet_name}/${address}_fullUtxo.out"
+      cp "${TMP_FOLDER}"/balance.out "${WALLET_FOLDER}/${wallet_name}/${address}_balance.out"
+    fi
+  else
+    # If Off-line, attempt to restore last UTXO and Balance from wallet folder
+    if [[ ! -z $2 && -f "${WALLET_FOLDER}/${wallet_name}"/${address}_fullUtxo.out && "${WALLET_FOLDER}/${wallet_name}"/${address}_balance.out ]]; then
+      cp "${WALLET_FOLDER}/${wallet_name}"/${address}_fullUtxo.out "${TMP_FOLDER}/fullUtxo.out"
+      cp "${WALLET_FOLDER}/${wallet_name}"/${address}_balance.out "${TMP_FOLDER}/balance.out"
+    else
+      say "${RED}ERROR${NC}: Utxo and Balance not found!"
+      utx0_count=0
+      lovelace=0
+      return 1
+    fi
+  fi
 
   while read -r utxo; do
     utx0_count=$(( utx0_count + 1 ))
@@ -835,14 +856,26 @@ sendADA() {
   fi
 }
 
-
 # Command    : isWalletRegistered [wallet name]
 # Description: check if wallet is registered on chain
 # Return     : 0 if registered, else 1
 isWalletRegistered() {
-  if getRewardAddress $1; then
-    stakeAddressInfo=$(${CCLI} shelley query stake-address-info ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --address ${reward_addr} | jq -r '.[] // empty')
-    [[ -n "${stakeAddressInfo}" ]] && return 0
+  wallet_name=$1
+  if getRewardAddress ${wallet_name}; then
+    if [[ ${SCRIPT_MODE} == "online" ]]; then
+      stakeAddressInfo=$(${CCLI} shelley query stake-address-info ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --address ${reward_addr} | jq -r '.[] // empty')
+      echo "${stakeAddressInfo}" > "${WALLET_FOLDER}/${wallet_name}"/stakeAddressInfo.out
+      [[ -n "${stakeAddressInfo}" ]] && return 0
+    else
+      # If Off-line, attempt to restore last stakeAddressInfo from wallet folder
+      if [[ -f "${WALLET_FOLDER}/${wallet_name}"/stakeAddressInfo.out ]]; then
+        stakeAddressInfo=$(cat "${WALLET_FOLDER}/${wallet_name}"/stakeAddressInfo.out)
+        [[ -n "${stakeAddressInfo}" ]] && return 0
+      else
+        say "${RED}ERROR${NC}: Stake Address Info not found!"
+        return 1
+      fi
+    fi
   fi
   return 1
 }
