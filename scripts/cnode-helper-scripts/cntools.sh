@@ -896,8 +896,7 @@ case $OPERATION in
       waitForInput && continue
     fi
 
-    echo "{\"s_wallet\":\"${s_wallet}\", \"s_addr\": \"${s_addr}\", \"newBalance\": \"${newBalance}\", \"d_wallet\": \"${d_wallet}\", \"d_addr\": \"${d_addr}\"}" > ${TMP_FOLDER}/tx.info
-
+    echo "{\"s_wallet\":\"${s_wallet}\", \"s_addr\": \"${s_addr}\", \"newBalance\": \"${newBalance}\", \"d_wallet\": \"${d_wallet}\", \"d_addr\": \"${d_addr}\", \"amountLovelace\": \"${amountLovelace}\", \"minFee\": \"${minFee}\"}" > ${TMP_FOLDER}/tx.info
     say "${GREEN}Transaction Prepared${NC}"
     waitForInput
 
