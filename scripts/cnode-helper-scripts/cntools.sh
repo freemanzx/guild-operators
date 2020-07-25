@@ -1221,7 +1221,7 @@ case $OPERATION in
     fi
 
     minPoolCost=$(( $(jq -r '.minPoolCost //0' "${TMP_FOLDER}"/protparams.json) / 1000000 )) # convert to ADA
-    [[ ${minPoolCost} -gt 0 ]] && cost_ada=${minPoolCost} || cost_ada=400 # default cost
+    [[ ${minPoolCost} -gt 0 ]] && cost_ada=${minPoolCost} || cost_ada=340 # default cost
     if [[ -f "${pool_config}" ]]; then
       cost_ada_saved=$(jq -r '.costADA //0' "${pool_config}")
       [[ ${cost_ada_saved} -gt ${minPoolCost} ]] && cost_ada=${cost_ada_saved}
