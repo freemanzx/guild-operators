@@ -136,7 +136,7 @@ function main {
 while true; do # Main loop
 
 # Start with a clean slate after each completed or canceled command excluding protparams.json from purge
-find "${TMP_FOLDER:?}" -type f -not -name 'protparams.json' -delete
+find "${TMP_FOLDER:?}" -type f -not -name 'protparams.json' 'shelley_trans_epoch' 'BlockTip.out' 'SlotTip.out' 'tx.signed' 'tx.info' -delete
 
 clear
 say "$(printf "%-52s %s" " >> CNTools $CNTOOLS_VERSION << " "A Guild Operators collaboration")" "log"
@@ -621,20 +621,36 @@ case $OPERATION in
   say "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
   say " Handle Funds"
   say ""
-  say " 1) Send      -  send ADA from a local wallet to an address or a wallet"
-  say " 2) Delegate  -  delegate stake wallet to a pool"
-  say " 3) Withdraw  -  withdraw earned rewards to base address"
+  say " 1) Get Tip   -  Get Block annd Slot Tip"
+  say " 2) Send      -  send ADA from a local wallet to an address or a wallet"
+  say " 3) Delegate  -  delegate stake wallet to a pool"
+  say " 4) Withdraw  -  withdraw earned rewards to base address"
   say "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 
   say " Select funds operation\n"
-  case $(select_opt "[s] Send" "[d] Delegate" "[w] Withdraw Rewards" "[h] Home") in
-    0) SUBCOMMAND="send" ;;
-    1) SUBCOMMAND="delegate" ;;
-    2) SUBCOMMAND="withdrawrewards" ;;
-    3) continue ;;
+  case $(select_opt "[g] Get Tip" "[p] Prepare Transaction" "[s] Send Transaction" "[d] Delegate" "[w] Withdraw Rewards" "[h] Home") in
+    0) SUBCOMMAND="tip" ;;
+    1) SUBCOMMAND="prepare" ;;
+    2) SUBCOMMAND="send" ;;
+    3) SUBCOMMAND="delegate" ;;
+    4) SUBCOMMAND="withdrawrewards" ;;
+    5) continue ;;
   esac
 
   case $SUBCOMMAND in
+    
+    tip)
+
+    clear
+    say " >> FUNDS >> GET TIP" "log"
+    say "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+    say ""
+    say "Block Tip: $(getBlockTip)"
+    say "Slot Tip: $(getSlotTip)"
+
+    waitForInput
+    ;; ###################################################################
+
     withdrawrewards)
 
     clear
@@ -721,7 +737,7 @@ case $OPERATION in
 
     ;; ###################################################################
 
-    send)
+    prepare)
 
     clear
     say " >> FUNDS >> SEND" "log"
@@ -742,9 +758,9 @@ case $OPERATION in
       if [[ ${wallet_count} -le ${WALLET_SELECTION_FILTER_LIMIT} ]]; then
         getBaseAddress ${dir}
         getPayAddress ${dir}
-        getBalance ${base_addr}
+        getBalance ${base_addr} ${dir}
         base_lovelace=${lovelace}
-        getBalance ${pay_addr}
+        getBalance ${pay_addr} ${dir}
         pay_lovelace=${lovelace}
         if [[ ${base_lovelace} -gt 0 && ${pay_lovelace} -gt 0 ]]; then
           s_wallet_dirs+=("${dir} (Funds: ${CYAN}$(formatLovelace ${base_lovelace})${NC} ADA | Enterprise Funds: ${CYAN}$(formatLovelace ${pay_lovelace})${NC} ADA)")
@@ -767,9 +783,9 @@ case $OPERATION in
 
     getBaseAddress ${s_wallet}
     getPayAddress ${s_wallet}
-    getBalance ${base_addr}
+    getBalance ${base_addr} ${s_wallet}
     base_lovelace=${lovelace}
-    getBalance ${pay_addr}
+    getBalance ${pay_addr} ${s_wallet}
     pay_lovelace=${lovelace}
 
     if [[ ${pay_lovelace} -gt 0 && ${base_lovelace} -gt 0 ]]; then
@@ -876,7 +892,31 @@ case $OPERATION in
       waitForInput && continue
     fi
 
-    if ! sendADA "${d_addr}" "${amountLovelace}" "${s_addr}" "${s_payment_sk_file}" "${include_fee}"; then
+    if ! prepareTosendADA "${d_addr}" "${amountLovelace}" "${s_addr}" "${s_payment_sk_file}" "${include_fee}" "${s_wallet}"; then
+      waitForInput && continue
+    fi
+
+    echo "{\"s_wallet\":\"${s_wallet}\", \"s_addr\": \"${s_addr}\", \"newBalance\": \"${newBalance}\", \"d_wallet\": \"${d_wallet}\", \"d_addr\": \"${d_addr}\"}" > ${TMP_FOLDER}/tx.info
+
+    say "${GREEN}Transaction Prepared${NC}"
+    waitForInput
+
+    ;; ###################################################################
+
+    send)
+
+    if [[ ! -f ${TMP_FOLDER}/tx.info || ! -f ${TMP_FOLDER}/tx.signed ]]; then
+      say "${RED}ERROR${nc}: Transaction or Source Info file not found!"
+      waitForInput && continue
+    fi
+
+    s_wallet=$(cat ${TMP_FOLDER}/tx.source_info | jq '.s_wallet')
+    s_addr=$(cat ${TMP_FOLDER}/tx.source_info | jq '.s_addr')
+    d_wallet=$(cat ${TMP_FOLDER}/tx.source_info | jq '.d_wallet')
+    d_addr=$(cat ${TMP_FOLDER}/tx.source_info | jq '.d_addr')
+    newBalance=$(cat ${TMP_FOLDER}/tx.source_info | jq '.newBalance')
+
+    if ! submitSendADA; then
       waitForInput && continue
     fi
 
@@ -884,7 +924,7 @@ case $OPERATION in
       waitForInput && continue
     fi
 
-    getBalance ${s_addr}
+    getBalance ${s_addr} ${s_wallet}
 
     while [[ ${lovelace} -ne ${newBalance} ]]; do
       say ""
@@ -892,7 +932,7 @@ case $OPERATION in
       if ! waitNewBlockCreated; then
         break
       fi
-      getBalance ${s_addr}
+      getBalance ${s_addr} ${s_wallet}
     done
 
     if [[ ${lovelace} -ne ${newBalance} ]]; then

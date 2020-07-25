@@ -353,13 +353,25 @@ decryptFile() {
 # Description: Get latest block number
 # Return     : string with tip on STDOUT
 getBlockTip() {
-  $CCLI shelley query tip ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} | jq -r '.blockNo'
+  if [[ ${SCRIPT_MODE} == "online" ]]; then
+    BlockTip=$($CCLI shelley query tip ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} | jq -r '.blockNo')
+    echo ${BlockTip} > ${TMP_FOLDER}/BlockTip.out
+  else
+    BlockTip=$(cat ${TMP_FOLDER}/BlockTip.out)
+  fi
+  echo ${BlockTip}
 }
 # Command    : getSlotTip
 # Description: Get latest slot number
 # Return     : string with tip on STDOUT
 getSlotTip() {
-  $CCLI shelley query tip ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} | jq -r '.slotNo'
+  if [[ ${SCRIPT_MODE} == "online" ]]; then
+    SlotTip=$($CCLI shelley query tip ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} | jq -r '.slotNo')
+    echo ${SlotTip} > ${TMP_FOLDER}/SlotTip.out
+  else
+    SlotTip=$(cat ${TMP_FOLDER}/SlotTip.out)
+  fi
+  echo ${SlotTip}
 }
 # Command    : getSlotTipRef
 # Description: Get calculated slot number tip
@@ -660,6 +672,11 @@ getBalance() {
 
   [[ -z $1 ]] && return 1
   address=$1
+  # say "${GREEN}Addres${NC}: ${address}"
+  if [[ ! -z $2 ]]; then
+    wallet_name=$2
+    # say "${GREEN}Wallet Name${NC}: ${wallet_name}"
+  fi
 
   # Get fresh UTXO and Balance when in on-line mode
   if [[ ${SCRIPT_MODE} == "online" ]]; then
@@ -667,7 +684,6 @@ getBalance() {
     tail -n +3 "${TMP_FOLDER}"/fullUtxo.out | sort -k3 -nr > "${TMP_FOLDER}"/balance.out
     # Store UTXO and Balance in wallet folder if wallet name provided
     if [[ ! -z $2 ]]; then
-      wallet_name=$2
       cp "${TMP_FOLDER}"/fullUtxo.out "${WALLET_FOLDER}/${wallet_name}/${address}_fullUtxo.out"
       cp "${TMP_FOLDER}"/balance.out "${WALLET_FOLDER}/${wallet_name}/${address}_balance.out"
     fi
@@ -703,7 +719,7 @@ getRewards() {
 }
 
 
-# Command    : sendADA [destination address] [amount] [source address] [source sign key] [Include Fee]
+# Command    : sendADA [destination address] [amount] [source address] [source sign key] [Include Fee] [Source Wallet Name]
 # Description: send ADA from source to destination
 #              can also be used to defrag address by sending all to self
 #              supports fee to be payed by sender(default) or receiver by reducing amount to send
@@ -715,7 +731,7 @@ getRewards() {
 # Return     : prints progress on STDOUT
 # Examples of Usage:
 #   >> sendADA 61WKMJemoBa....ssL7fzhq 100 61RM9xbIdg....HbyQY175 "$CNODE_HOME/priv/wallet/MyWallet/payment.skey" "no"
-sendADA() {
+prepareTosendADA() {
 
   # Handle script arguments
   dAddr="$1"
@@ -723,13 +739,21 @@ sendADA() {
   sAddr="$3"
   sKey="$4"
   inclFee="$5"
+  sWalletName="$6"
+
+  # say "dAddr: ${dAddr}"
+  # say "amount: ${amount}"
+  # say "sAddr: ${sAddr}"
+  # say "sKey: ${sKey}"
+  # say "inclFee: ${inclFee}"
+  # say "sWalletName: ${sWalletName}"
 
   say "" 1
   say "# Protocol Parameters" 1 "log"
   currSlot=$(getSlotTip)
   ttlValue=$(( currSlot + 1000 ))
   say "Current slot is ${currSlot}, setting ttl to ${ttlValue}" 1 "log"
-  getBalance ${sAddr}
+  getBalance ${sAddr} ${sWalletName}
 
   balance=0
   utxoCount=0
@@ -750,6 +774,7 @@ sendADA() {
 
   [[ ${balance} -eq ${amount} ]] && outCount=1 || outCount=2
 
+  say "Calculate fee, new amount and remaining balance"
   say "" 1
   say "# Calculate fee, new amount and remaining balance" 1 "log"
   say "$ ${CCLI} shelley transaction build-raw ${txIn} --tx-out ${dAddr}+${amount} --ttl ${ttlValue} --fee 0 --out-file ${TMP_FOLDER}/tx0.tmp" 2
@@ -818,16 +843,10 @@ sendADA() {
     --out-file "${TMP_FOLDER}"/tx.signed
   )
 
-  submitArgs=(
-    shelley transaction submit
-    --tx-file "${TMP_FOLDER}"/tx.signed
-    ${PROTOCOL_IDENTIFIER}
-    ${NETWORK_IDENTIFIER}
-  )
-
   say "" 1
-  say "# Build, Sign & Send transaction" 1 "log"
+  say "# Build & Sign transaction" 1 "log"
 
+  say "Building transaction"
   say "Building transaction" 1
   say "$ ${CCLI} ${buildArgs[*]}" 2
   output=$(${CCLI} ${buildArgs[*]})
@@ -837,6 +856,7 @@ sendADA() {
     return 1
   fi
 
+  say "Signing transaction"
   say "Signing transaction" 1
   say "$ ${CCLI} ${signArgs[*]}" 2
   output=$(${CCLI} ${signArgs[*]})
@@ -846,6 +866,24 @@ sendADA() {
     return 1
   fi
 
+}
+
+# Command    : submitSendADA
+# Description: submits signed transaction to the network
+# Return     : prints progress on STDOUT
+submitSendADA() {
+
+  say "" 1
+  say "# Send transaction" 1 "log"
+
+  submitArgs=(
+    shelley transaction submit
+    --tx-file "${TMP_FOLDER}"/tx.signed
+    ${PROTOCOL_IDENTIFIER}
+    ${NETWORK_IDENTIFIER}
+  )
+
+  say "Sending transaction"
   say "Sending transaction" 1
   say "$ ${CCLI} ${submitArgs[*]}" 2
   output=$(${CCLI} ${submitArgs[*]})
@@ -854,6 +892,7 @@ sendADA() {
     say "$output"
     return 1
   fi
+
 }
 
 # Command    : isWalletRegistered [wallet name]
