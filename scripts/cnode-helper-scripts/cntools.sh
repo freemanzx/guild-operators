@@ -910,11 +910,11 @@ case $OPERATION in
       waitForInput && continue
     fi
 
-    s_wallet=$(cat ${TMP_FOLDER}/tx.source_info | jq '.s_wallet')
-    s_addr=$(cat ${TMP_FOLDER}/tx.source_info | jq '.s_addr')
-    d_wallet=$(cat ${TMP_FOLDER}/tx.source_info | jq '.d_wallet')
-    d_addr=$(cat ${TMP_FOLDER}/tx.source_info | jq '.d_addr')
-    newBalance=$(cat ${TMP_FOLDER}/tx.source_info | jq '.newBalance')
+    s_wallet=$(cat ${TMP_FOLDER}/tx.info | jq -r '.s_wallet')
+    s_addr=$(cat ${TMP_FOLDER}/tx.info | jq -r '.s_addr')
+    d_wallet=$(cat ${TMP_FOLDER}/tx.info | jq -r '.d_wallet')
+    d_addr=$(cat ${TMP_FOLDER}/tx.info | jq -r '.d_addr')
+    newBalance=$(cat ${TMP_FOLDER}/tx.info | jq -r '.newBalance')
 
     if ! submitSendADA; then
       waitForInput && continue
