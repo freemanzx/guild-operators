@@ -89,10 +89,10 @@ if [[ "$2" = "g" ]]; then
   curl -s -o byron-genesis.json https://raw.githubusercontent.com/freemanzx/guild-operators/offline-ops/files/ptn0/files/byron-genesis.json
   curl -s -o topology.json https://raw.githubusercontent.com/freemanzx/guild-operators/offline-ops/files/ptn0/files/topology.json
 else
-  # mainnet_candidate 3 network
-  curl -sL -o byron-genesis.json https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/mainnet_candidate_3-byron-genesis.json
-  curl -sL -o genesis.json https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/mainnet_candidate_3-shelley-genesis.json
-  curl -sL -o topology.json https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/mainnet_candidate_3-topology.json
+  # mainnet_candidate 4 network
+  curl -sL -o byron-genesis.json https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/mainnet_candidate_4-byron-genesis.json
+  curl -sL -o genesis.json https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/mainnet_candidate_4-shelley-genesis.json
+  curl -sL -o topology.json https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/mainnet_candidate_4-topology.json
 fi
 
 cp ptn0.json ptn0.json.bkp
@@ -126,7 +126,6 @@ sed -e "s@CNODE_HOME=.*@${CNODE_VNAME}_HOME=${CNODE_HOME}@g" -e "s@CNODE_HOME@${
 curl -s -o cabal-build-all.sh https://raw.githubusercontent.com/freemanzx/guild-operators/offline-ops/files/ptn0/scripts/cabal-build-all.sh
 curl -s -o stack-build.sh https://raw.githubusercontent.com/freemanzx/guild-operators/offline-ops/files/ptn0/scripts/stack-build.sh
 curl -s -o system-info.sh https://raw.githubusercontent.com/freemanzx/guild-operators/offline-ops/files/ptn0/scripts/system-info.sh
-curl -s -o "$CNODE_HOME"/priv/delegate.counter https://raw.githubusercontent.com/freemanzx/guild-operators/offline-ops/files/ptn0/files/delegate.counter
 chmod 755 ./*.sh
 # If you opt for an alternate CNODE_HOME, please run the below:
 # sed -i -e "s#/opt/cardano/cnode#${CNODE_HOME}#" *.sh
