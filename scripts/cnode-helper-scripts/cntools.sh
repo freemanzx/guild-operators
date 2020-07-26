@@ -72,17 +72,26 @@ if ! need_cmd "curl" || \
    ! need_cmd "jq" || \
    ! need_cmd "bc" || \
    ! need_cmd "sed" || \
-   ! need_cmd "awk"; then exit 1
+   ! need_cmd "awk" || \
+   ! need_cmd "column"; then exit 1
 fi
 
 # Verify if the combinator network is already on shelley and if so, the epoch of transition
 if [[ "${PROTOCOL}" == "Cardano" ]]; then
-  if [[ "$(cat $SHELLEY_TRANS_FILENAME 2>/dev/null)" == ""  ]]; then
+  if grep \"TestShelleyHardForkAt ${CONFIG} | grep -v \#; then
+    # Check if Fork is virtual
+    shelleyTransitionEpoch=$(grep \"TestShelleyHardForkAt ${CONFIG} | grep -v \# | awk '{print $2}' | cut -d, -f1)
+    echo "$shelleyTransitionEpoch" > "$SHELLEY_TRANS_FILENAME"
+  elif [[ ! "$(ls -A $CNODE_HOME/logs/*.json 2>/dev/null)" ]]; then
+    # Check if JSON logging is enabled, and exit if it isnt
+    say "\n\n${ORANGE}WARN${NC}: Please ensure that you've used $CNODE_HOME/files/scripts/cnode.sh to start the node, and that you've not overwritten the config file downloaded by prereqs.sh"
+    exit 1
+  elif [[ "$(cat $SHELLEY_TRANS_FILENAME 2>/dev/null)" == ""  ]]; then
     shelleyTransitionEpoch=$(grep -i hardforkupdatetransitionconfirmed $CNODE_HOME/logs/*.json 2>/dev/null | cut -d: -f 2- | tail -1 | jq -r '.data.events[1].transitionEpoch')
     if [[ "$shelleyTransitionEpoch" != "" ]]; then
       echo "$shelleyTransitionEpoch" > "$SHELLEY_TRANS_FILENAME"
     else
-      say "${ORANGE}WARN${NC}: The logs indicate that cardano-node has not yet synched to network or the network has not reached the hard fork from Byron to shelley , please wait to use CNTools until your node is in shelley era"
+      say "\n\n${ORANGE}WARN${NC}: The logs indicate that cardano-node has not yet synched to network or the network has not reached the hard fork from Byron to shelley , please wait to use CNTools until your node is in shelley era"
       exit 1
     fi
   else
@@ -92,7 +101,7 @@ fi
 
 # Get protocol parameters and save to ${TMP_FOLDER}/protparams.json
 ${CCLI} shelley query protocol-parameters ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/protparams.json 2>/dev/null|| {
-  say "${ORANGE}WARN${NC}: failed to query protocol parameters, ensure your node is running with correct genesis (the node needs to be in sync to 1 epoch after the hardfork)"
+  say "\n\n${ORANGE}WARN${NC}: failed to query protocol parameters, ensure your node is running with correct genesis (the node needs to be in sync to 1 epoch after the hardfork)"
   say "\n${BLUE}Press c to continue or any other key to quit${NC}"
   say "only offline functions will be available if you continue\n"
   read -r -n 1 -s -p "" answer
@@ -1022,7 +1031,7 @@ case $OPERATION in
          [[ -z "${vkey_cbor}" ]] && continue
          pool_name="${vkey_cbor}"
          pool_coldkey_vk_file="${TMP_FOLDER}"/pool_delegation.vkey
-         printf "{\"type\":\"Node operator verification key\",\"description\":\"Stake Pool Operator Verification Key\",\"cborHex\":\"%s\"}" ${vkey_cbor} > "${pool_coldkey_vk_file}"
+         printf "{\"type\":\"StakePoolVerificationKey_ed25519\",\"description\":\"Stake Pool Operator Verification Key\",\"cborHex\":\"%s\"}" ${vkey_cbor} > "${pool_coldkey_vk_file}"
          ;;
       2) continue ;;
     esac
@@ -1168,7 +1177,7 @@ case $OPERATION in
     say "Dumping ledger-state from node, can take a while on larger networks...\n"
 
     pool_dirs=()
-    timeout -k 5 30 ${CCLI} shelley query ledger-state ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/ledger-state.json
+    timeout -k 5 60 ${CCLI} shelley query ledger-state ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/ledger-state.json
     if ! getDirs "${POOL_FOLDER}"; then continue; fi # dirs() array populated with all pool folders
     for dir in "${dirs[@]}"; do
       pool_coldkey_vk_file="${POOL_FOLDER}/${dir}/${POOL_COLDKEY_VK_FILENAME}"
@@ -1294,10 +1303,12 @@ case $OPERATION in
         waitForInput && continue
       fi
       read -r -p "Enter Pool's Description (default: ${meta_description}): " desc_enter
-      desc_enter=${desc_enter}
       [[ -n "${desc_enter}" ]] && meta_description="${desc_enter}"
+      if [[ ${#meta_description} -gt 255 ]]; then
+        say "${RED}ERROR${NC}: Description cannot exceed 255 characters"
+        waitForInput && continue
+      fi
       read -r -p "Enter Pool's Homepage (default: ${meta_homepage}): " homepage_enter
-      homepage_enter="${homepage_enter}"
       [[ -n "${homepage_enter}" ]] && meta_homepage="${homepage_enter}"
       if [[ ! "${meta_homepage}" =~ https?://.* || ${#meta_homepage} -gt 64 ]]; then
         say "${RED}ERROR${NC}: invalid URL format or more than 64 chars in length"
@@ -1586,7 +1597,7 @@ case $OPERATION in
     say "Dumping ledger-state from node, can take a while on larger networks...\n"
 
     pool_dirs=()
-    timeout -k 5 30 ${CCLI} shelley query ledger-state ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/ledger-state.json
+    timeout -k 5 60 ${CCLI} shelley query ledger-state ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/ledger-state.json
     if ! getDirs "${POOL_FOLDER}"; then continue; fi # dirs() array populated with all pool folders
     for dir in "${dirs[@]}"; do
       pool_coldkey_vk_file="${POOL_FOLDER}/${dir}/${POOL_COLDKEY_VK_FILENAME}"
@@ -1709,10 +1720,12 @@ case $OPERATION in
         waitForInput && continue
       fi
       read -r -p "Enter Pool's Description (default: ${meta_description}): " desc_enter
-      desc_enter=${desc_enter}
       [[ -n "${desc_enter}" ]] && meta_description="${desc_enter}"
+      if [[ ${#meta_description} -gt 255 ]]; then
+        say "${RED}ERROR${NC}: Description cannot exceed 255 characters"
+        waitForInput && continue
+      fi
       read -r -p "Enter Pool's Homepage (default: ${meta_homepage}): " homepage_enter
-      homepage_enter="${homepage_enter}"
       [[ -n "${homepage_enter}" ]] && meta_homepage="${homepage_enter}"
       if [[ ! "${meta_homepage}" =~ https?://.* || ${#meta_homepage} -gt 64 ]]; then
         say "${RED}ERROR${NC}: invalid URL format or more than 64 chars in length"
@@ -1988,7 +2001,7 @@ case $OPERATION in
     say "Dumping ledger-state from node, can take a while on larger networks...\n"
 
     pool_dirs=()
-    timeout -k 5 30 ${CCLI} shelley query ledger-state ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/ledger-state.json
+    timeout -k 5 60 ${CCLI} shelley query ledger-state ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/ledger-state.json
     if ! getDirs "${POOL_FOLDER}"; then continue; fi # dirs() array populated with all pool folders
     for dir in "${dirs[@]}"; do
       pool_coldkey_vk_file="${POOL_FOLDER}/${dir}/${POOL_COLDKEY_VK_FILENAME}"
@@ -2114,7 +2127,7 @@ case $OPERATION in
     say "Dumping ledger-state from node, can take a while on larger networks...\n"
     say "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 
-    timeout -k 5 30 ${CCLI} shelley query ledger-state ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/ledger-state.json
+    timeout -k 5 60 ${CCLI} shelley query ledger-state ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/ledger-state.json
 
     while IFS= read -r -d '' pool; do
       say ""
@@ -2175,7 +2188,7 @@ case $OPERATION in
     pool_name="${dir_name}"
 
     say "Dumping ledger-state from node, can take a while on larger networks...\n"
-    timeout -k 5 45 ${CCLI} shelley query ledger-state ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/ledger-state.json
+    timeout -k 5 60 ${CCLI} shelley query ledger-state ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/ledger-state.json
 
     say "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
     say ""
