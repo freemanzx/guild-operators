@@ -348,6 +348,35 @@ decryptFile() {
   say "${1} successfully decrypted" "log"
 }
 
+# Command    : getLedgerState
+# Description: Get ledger-state
+# Return     : null
+getLedgerState() {
+  if [[ ${SCRIPT_MODE} == "online" ]]; then
+    make_dump="yes"
+    if [[ -f "${TMP_FOLDER}"/ledger-state.json ]]; then
+      say "${GREEN}SUCCESS${NC}: Ledger State found!"
+      say ""
+      say "${ORANGE}WARN${NC}: Do you want to dump ledger-state from node, can take a while on larger networks?\n"
+      case $(select_opt "[y] Yes" "[n] No" "[Esc] Cancel") in
+        0) make_dump="yes" ;;
+        1) make_dump="no" ;;
+        2) continue ;;
+      esac
+    fi
+    if [[ ${make_dump} == "yes" ]]; then
+      say "Dumping ledger-state from node, can take a while on larger networks...\n"
+      say "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+      timeout -k 5 60 ${CCLI} shelley query ledger-state ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/ledger-state.json
+    fi
+  else
+    if [[ ! -f "${TMP_FOLDER}"/ledger-state.json ]]; then
+      say "${RED}ERROR${NC}: Ledger State not found!"
+    else
+      say "${GREEN}SUCCESS${NC}: Ledger State found!"
+    fi
+  fi
+}
 
 # Command    : getBlockTip
 # Description: Get latest block number
@@ -924,8 +953,8 @@ isWalletRegistered() {
 # Return     : prints progress on STDOUT
 registerStakeWallet() {
 
-  say "\nWallet ${GREEN}${1}${NC} not registered on chain"
-  waitForInput "press any key to continue with registration"
+  # say "\nWallet ${GREEN}${1}${NC} not registered on chain"
+  # waitForInput "press any key to continue with registration"
 
   # Wallet key filenames
   payment_sk_file="${WALLET_FOLDER}/${1}/${WALLET_PAY_SK_FILENAME}"
@@ -1006,12 +1035,12 @@ registerStakeWallet() {
     --out-file "${TMP_FOLDER}"/tx.signed
   )
 
-  submitArgs=(
-    shelley transaction submit
-    --tx-file "${TMP_FOLDER}"/tx.signed
-    ${PROTOCOL_IDENTIFIER}
-    ${NETWORK_IDENTIFIER}
-  )
+  # submitArgs=(
+  #   shelley transaction submit
+  #   --tx-file "${TMP_FOLDER}"/tx.signed
+  #   ${PROTOCOL_IDENTIFIER}
+  #   ${NETWORK_IDENTIFIER}
+  # )
 
   say "" 1
   say "# Build, Sign & Send transaction" 1 "log"
@@ -1034,36 +1063,40 @@ registerStakeWallet() {
     return 1
   fi
 
-  say "Sending transaction" 1 "log"
-  say "$ ${CCLI} ${submitArgs[*]}" 2
-  output=$(${CCLI} ${submitArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 3. Problem during tx submission with args ${submitArgs[*]}"
-    say "$output"
-    return 1
-  fi
+  # say "Sending transaction" 1 "log"
+  # say "$ ${CCLI} ${submitArgs[*]}" 2
+  # output=$(${CCLI} ${submitArgs[*]})
+  # if [[ -n $output ]]; then
+  #   say "${RED}ERROR${NC}: 3. Problem during tx submission with args ${submitArgs[*]}"
+  #   say "$output"
+  #   return 1
+  # fi
 
-  say "\n\n${ORANGE}Waiting for wallet registration to be recorded on chain, if aborted, choosen action will fail${NC}"
+  echo "{\"s_wallet\":\"${1}\", \"s_addr\": \"${base_addr}\", \"newBalance\": \"${newBalance}\", \"d_wallet\": \"N/A\", \"d_addr\": \"N/A\", \"amountLovelace\": \"N/A\", \"minFee\": \"${minFee}\"}" > ${TMP_FOLDER}/tx.info
+  say ""
+  say "${GREEN}Wallet Registration Prepared${NC}"
 
-  while true; do
-    if ! waitNewBlockCreated; then
-      break
-    fi
-    getBalance ${base_addr}
-    if [[ ${lovelace} -ne ${newBalance} ]]; then
-      say ""
-      say "${ORANGE}WARN${NC}: Balance mismatch, transaction not included in latest block ($(formatLovelace ${lovelace}) != $(formatLovelace ${newBalance}))"
-    else
-      break
-    fi
-  done
+  # say "\n\n${ORANGE}Waiting for wallet registration to be recorded on chain, if aborted, choosen action will fail${NC}"
 
-  if [[ ${lovelace} -ne ${newBalance} ]]; then
-    say "${RED}ERROR${NC}: operation aborted, selected action will not complete"
-    return 1
-  fi
+  # while true; do
+  #   if ! waitNewBlockCreated; then
+  #     break
+  #   fi
+  #   getBalance ${base_addr}
+  #   if [[ ${lovelace} -ne ${newBalance} ]]; then
+  #     say ""
+  #     say "${ORANGE}WARN${NC}: Balance mismatch, transaction not included in latest block ($(formatLovelace ${lovelace}) != $(formatLovelace ${newBalance}))"
+  #   else
+  #     break
+  #   fi
+  # done
 
-  reward_lovelace=0
+  # if [[ ${lovelace} -ne ${newBalance} ]]; then
+  #   say "${RED}ERROR${NC}: operation aborted, selected action will not complete"
+  #   return 1
+  # fi
+
+  # reward_lovelace=0
 }
 
 
@@ -1089,6 +1122,7 @@ registerPool() {
   pool_regcert_file="$4"
   pool_pledgecert_file="$5"
   pay_payment_sk_file="$6"
+  base_wallet="$7"
 
   if [[ ! -s "${TMP_FOLDER}"/balance.out ]]; then
     say "${RED}ERROR${NC}: wallet empty"
@@ -1164,12 +1198,12 @@ registerPool() {
     --out-file "${TMP_FOLDER}"/tx.signed
   )
 
-  submitArgs=(
-    shelley transaction submit
-    --tx-file "${TMP_FOLDER}"/tx.signed
-    ${PROTOCOL_IDENTIFIER}
-    ${NETWORK_IDENTIFIER}
-  )
+  # submitArgs=(
+  #   shelley transaction submit
+  #   --tx-file "${TMP_FOLDER}"/tx.signed
+  #   ${PROTOCOL_IDENTIFIER}
+  #   ${NETWORK_IDENTIFIER}
+  # )
 
   say "" 1
   say "# Build, Sign & Send transaction" 1 "log"
@@ -1192,14 +1226,18 @@ registerPool() {
     return 1
   fi
 
-  say "Sending transaction" 1
-  say "$ ${CCLI} ${submitArgs[*]}" 2
-  output=$(${CCLI} ${submitArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 3. Problem during tx submission with args ${submitArgs[*]}"
-    say "$output"
-    return 1
-  fi
+  # say "Sending transaction" 1
+  # say "$ ${CCLI} ${submitArgs[*]}" 2
+  # output=$(${CCLI} ${submitArgs[*]})
+  # if [[ -n $output ]]; then
+  #   say "${RED}ERROR${NC}: 3. Problem during tx submission with args ${submitArgs[*]}"
+  #   say "$output"
+  #   return 1
+  # fi
+
+  echo "{\"s_wallet\":\"${base_wallet}\", \"s_addr\": \"${base_addr}\", \"newBalance\": \"${newBalance}\", \"d_wallet\": \"N/A\", \"d_addr\": \"N/A\", \"amountLovelace\": \"N/A\", \"minFee\": \"${minFee}\"}" > ${TMP_FOLDER}/tx.info
+  say ""
+  say "${GREEN}Stake Pool Registration Prepared${NC}"
 }
 
 
