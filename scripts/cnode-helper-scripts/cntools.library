@@ -1261,6 +1261,7 @@ modifyPool() {
   stake_sk_file="$3"
   pool_regcert_file="$4"
   pay_payment_sk_file="$5"
+  base_wallet="$6"
 
   say "" 1
   say "# Protocol Parameters" 1 "log"
@@ -1328,12 +1329,12 @@ modifyPool() {
     --out-file "${TMP_FOLDER}"/tx.signed
   )
 
-  submitArgs=(
-    shelley transaction submit
-    --tx-file "${TMP_FOLDER}"/tx.signed
-    ${PROTOCOL_IDENTIFIER}
-    ${NETWORK_IDENTIFIER}
-  )
+  # submitArgs=(
+  #   shelley transaction submit
+  #   --tx-file "${TMP_FOLDER}"/tx.signed
+  #   ${PROTOCOL_IDENTIFIER}
+  #   ${NETWORK_IDENTIFIER}
+  # )
 
   say "" 1
   say "# Build, Sign & Send transaction" 1 "log"
@@ -1356,14 +1357,19 @@ modifyPool() {
     return 1
   fi
 
-  say "Sending transaction" 1
-  say "$ ${CCLI} ${submitArgs[*]}" 2
-  output=$(${CCLI} ${submitArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 3. Problem during tx submission with args ${submitArgs[*]}"
-    say "$output"
-    return 1
-  fi
+  # say "Sending transaction" 1
+  # say "$ ${CCLI} ${submitArgs[*]}" 2
+  # output=$(${CCLI} ${submitArgs[*]})
+  # if [[ -n $output ]]; then
+  #   say "${RED}ERROR${NC}: 3. Problem during tx submission with args ${submitArgs[*]}"
+  #   say "$output"
+  #   return 1
+  # fi
+
+  echo "{\"s_wallet\":\"${base_wallet}\", \"s_addr\": \"${base_addr}\", \"newBalance\": \"${newBalance}\", \"d_wallet\": \"N/A\", \"d_addr\": \"N/A\", \"amountLovelace\": \"N/A\", \"minFee\": \"${minFee}\"}" > ${TMP_FOLDER}/tx.info
+  say ""
+  say "${GREEN}Stake Pool Modification Prepared${NC}"
+
 }
 
 # Command    : withdrawRewards [stake vkey file] [stake skey file] [payment skey file] [base address] [reward address] [rewards in lovelace]

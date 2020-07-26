@@ -1727,11 +1727,9 @@ case $OPERATION in
       say "${RED}ERROR${NC}: CNTools started without node access, only offline functions available!"
       waitForInput && continue
     fi
-
-    say "Dumping ledger-state from node, can take a while on larger networks...\n"
+    getLedgerState
 
     pool_dirs=()
-    timeout -k 5 60 ${CCLI} shelley query ledger-state ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/ledger-state.json
     if ! getDirs "${POOL_FOLDER}"; then continue; fi # dirs() array populated with all pool folders
     for dir in "${dirs[@]}"; do
       pool_coldkey_vk_file="${POOL_FOLDER}/${dir}/${POOL_COLDKEY_VK_FILENAME}"
@@ -1990,10 +1988,12 @@ case $OPERATION in
       pay_payment_sk_file="${WALLET_FOLDER}/${dir}/${WALLET_PAY_SK_FILENAME}"
       if ! getBaseAddress ${dir} && [[ ! -f "${stake_sk_file}" || ! -f "${stake_vk_file}" || ! -f "${pay_payment_sk_file}" ]]; then continue; fi
       if [[ ${wallet_count} -le ${WALLET_SELECTION_FILTER_LIMIT} ]]; then
-        getBalance ${base_addr}
+        getBalance ${base_addr} ${dir}
         [[ ${lovelace} -eq 0 ]] && continue
         if getRewardAddress ${dir}; then
-          delegation_pool_id=$(${CCLI} shelley query stake-address-info ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --address "${reward_addr}" | jq -r '.[].delegation // empty')
+          isWalletRegistered ${dir}
+          delegation_pool_id=$(echo ${stakeAddressInfo} | jq -r '.[].delegation // empty')
+#         delegation_pool_id=$(${CCLI} shelley query stake-address-info ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --address "${reward_addr}" | jq -r '.[].delegation // empty')
           unset poolName
           if [[ -n ${delegation_pool_id} ]]; then
             while IFS= read -r -d '' pool; do
@@ -2025,7 +2025,7 @@ case $OPERATION in
     if ! selectDir "${wallet_dirs[@]}"; then continue; fi # ${dir_name} populated by selectDir function
     wallet="$(echo ${dir_name} | cut -d' ' -f1)"
     getBaseAddress ${wallet}
-    getBalance ${base_addr}
+    getBalance ${base_addr} ${wallet}
 
     if [[ ${lovelace} -gt 0 ]]; then
       say "$(printf "%s\t${CYAN}%s${NC} ADA" "Funds in pledge wallet:"  "$(formatLovelace ${lovelace})")" "log"
@@ -2033,7 +2033,8 @@ case $OPERATION in
       say "${RED}ERROR${NC}: no funds available for wallet ${GREEN}${wallet}${NC}"
       waitForInput && continue
     fi
-    if ! isWalletRegistered ${wallet} && ! registerStakeWallet ${wallet}; then
+    if ! isWalletRegistered ${wallet}; then
+      say "${RED}ERROR${NC}: wallet ${GREEN}${wallet}${NC} not registered!"
       waitForInput && continue
     fi
 
@@ -2080,30 +2081,30 @@ case $OPERATION in
     ${CCLI} shelley stake-pool registration-certificate --cold-verification-key-file "${pool_coldkey_vk_file}" --vrf-verification-key-file "${pool_vrf_vk_file}" --pool-pledge ${pledge_lovelace} --pool-cost ${cost_lovelace} --pool-margin ${margin_fraction} --pool-reward-account-verification-key-file "${stake_vk_file}" --pool-owner-stake-verification-key-file "${stake_vk_file}" --metadata-url "${meta_json_url}" --metadata-hash "$(${CCLI} shelley stake-pool metadata-hash --pool-metadata-file ${pool_meta_file} )" ${relay_output} ${NETWORK_IDENTIFIER} --out-file "${pool_regcert_file}"
 
     say "sending transaction to chain" 1 "log"
-    if ! modifyPool "${base_addr}" "${pool_coldkey_sk_file}" "${stake_sk_file}" "${pool_regcert_file}" "${pay_payment_sk_file}"; then
+    if ! modifyPool "${base_addr}" "${pool_coldkey_sk_file}" "${stake_sk_file}" "${pool_regcert_file}" "${pay_payment_sk_file}" "${wallet}"; then
       say "${RED}ERROR${NC}: failure during pool update, removing newly created registration certificate"
       rm -f "${pool_regcert_file}"
       waitForInput && continue
     fi
 
-    if ! waitNewBlockCreated; then
-      waitForInput && continue
-    fi
+    # if ! waitNewBlockCreated; then
+    #   waitForInput && continue
+    # fi
 
-    getBalance ${base_addr}
+    # getBalance ${base_addr}
 
-    while [[ ${lovelace} -ne ${newBalance} ]]; do
-      say ""
-      say "${ORANGE}WARN${NC}: Balance mismatch, transaction not included in latest block ($(formatLovelace ${lovelace}) != $(formatLovelace ${newBalance}))"
-      if ! waitNewBlockCreated; then
-        break
-      fi
-      getBalance ${base_addr}
-    done
+    # while [[ ${lovelace} -ne ${newBalance} ]]; do
+    #   say ""
+    #   say "${ORANGE}WARN${NC}: Balance mismatch, transaction not included in latest block ($(formatLovelace ${lovelace}) != $(formatLovelace ${newBalance}))"
+    #   if ! waitNewBlockCreated; then
+    #     break
+    #   fi
+    #   getBalance ${base_addr}
+    # done
 
-    if [[ ${lovelace} -ne ${newBalance} ]]; then
-      waitForInput && continue
-    fi
+    # if [[ ${lovelace} -ne ${newBalance} ]]; then
+    #   waitForInput && continue
+    # fi
 
     say ""
     say "Pool ${GREEN}${pool_name}${NC} successfully updated with new parameters using wallet ${GREEN}${wallet}${NC} to pay for registration fee" "log"
@@ -2328,8 +2329,7 @@ case $OPERATION in
     if ! selectDir "${pool_dirs[@]}"; then continue; fi # ${dir_name} populated by selectDir function
     pool_name="${dir_name}"
 
-    say "Dumping ledger-state from node, can take a while on larger networks...\n"
-    timeout -k 5 60 ${CCLI} shelley query ledger-state ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/ledger-state.json
+    getLedgerState
 
     say "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
     say ""
