@@ -2215,12 +2215,26 @@ rotatePoolKeys() {
   getCurrentKESperiod
   echo "${current_kes_period}" > ${pool_saved_kes_start}
 
-  say "creating new hot keys and certificate" 1
-  say "$ ${CCLI} node key-gen-KES --verification-key-file ${pool_hotkey_vk_file} --signing-key-file ${pool_hotkey_sk_file}" 2
-  if ! ${CCLI} node key-gen-KES --verification-key-file "${pool_hotkey_vk_file}" --signing-key-file "${pool_hotkey_sk_file}"; then return 1; fi
-  say "$ ${CCLI} node issue-op-cert --kes-verification-key-file ${pool_hotkey_vk_file} --cold-signing-key-file ${pool_coldkey_sk_file} --operational-certificate-issue-counter-file ${pool_opcert_counter_file} --kes-period ${current_kes_period} --out-file ${pool_opcert_file}" 2
-  if ! ${CCLI} node issue-op-cert --kes-verification-key-file "${pool_hotkey_vk_file}" --cold-signing-key-file "${pool_coldkey_sk_file}" --operational-certificate-issue-counter-file "${pool_opcert_counter_file}" --kes-period "${current_kes_period}" --out-file "${pool_opcert_file}"; then return 1; fi
-  chmod 700 ${POOL_FOLDER}/${pool_name}/*
+  # Confirm current KER period
+  say "${ORANGE}WARN${NC}: Confirm if calculated current KES period ${ORANGE}${current_kes_period}${NC} is the same as the one on the network?\n"
+  case $(select_opt "[y] Yes" "[n] No") in
+    0) make_dump="yes" ;;
+    1) make_dump="no" ;;
+  esac
+  if [[ ${make_dump} == "yes" ]]; then
 
-  kesExpiration "${current_kes_period}"
+    say "creating new hot keys and certificate" 1
+    say "$ ${CCLI} node key-gen-KES --verification-key-file ${pool_hotkey_vk_file} --signing-key-file ${pool_hotkey_sk_file}" 2
+    if ! ${CCLI} node key-gen-KES --verification-key-file "${pool_hotkey_vk_file}" --signing-key-file "${pool_hotkey_sk_file}"; then return 1; fi
+    say "$ ${CCLI} node issue-op-cert --kes-verification-key-file ${pool_hotkey_vk_file} --cold-signing-key-file ${pool_coldkey_sk_file} --operational-certificate-issue-counter-file ${pool_opcert_counter_file} --kes-period ${current_kes_period} --out-file ${pool_opcert_file}" 2
+    if ! ${CCLI} node issue-op-cert --kes-verification-key-file "${pool_hotkey_vk_file}" --cold-signing-key-file "${pool_coldkey_sk_file}" --operational-certificate-issue-counter-file "${pool_opcert_counter_file}" --kes-period "${current_kes_period}" --out-file "${pool_opcert_file}"; then return 1; fi
+    chmod 700 ${POOL_FOLDER}/${pool_name}/*
+    kesExpiration "${current_kes_period}"
+
+  else
+    say "${ORANGE}WARN${NC}: KES rotating keys cancelled!\n";
+    return 1;
+
+  fi
+
 }
