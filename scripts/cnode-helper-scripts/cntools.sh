@@ -2879,6 +2879,7 @@ EOF
       mkdir -p ${KES_DIR}/${pool_name}
       cp -v ${pool_hotkey_sk_file} ${KES_DIR}/${pool_name}/
       cp -v ${pool_opcert_file} ${KES_DIR}/${pool_name}/
+      cp -v ${POOL_FOLDER}/${pool_name}/${POOL_VRF_SK_FILENAME} ${KES_DIR}/${pool_name}/
     fi
     say "Restart your pool node for changes to take effect"
 
