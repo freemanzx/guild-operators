@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2034,SC2086,SC2230
+# shellcheck disable=SC2034,SC2086,SC2230,SC2206
 
 ############################################################
 # Variables to keep counter for versions                   #
@@ -7,12 +7,29 @@
 # The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 # and this adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 # Any breaking changes (eg: that requires change of cntools.config, env or a change in priv folder would be considered breaking and will be exempt from auto-update)
-CNTOOLS_MAJOR_VERSION=5
+CNTOOLS_MAJOR_VERSION=6
 # Changes that can be applied without breaking existing functionality that can be applied from within CNTools
-CNTOOLS_MINOR_VERSION=0
+CNTOOLS_MINOR_VERSION=3
 # Backwards compatible bug fixes. No additional functionality or major changes and can be applied from within CNTools
-CNTOOLS_PATCH_VERSION=6
+CNTOOLS_PATCH_VERSION=1
 CNTOOLS_VERSION="${CNTOOLS_MAJOR_VERSION}.${CNTOOLS_MINOR_VERSION}.${CNTOOLS_PATCH_VERSION}"
+
+############################################################
+# Default config values                                    #
+# overriden by values set in cntools.config                #
+############################################################
+[[ -z ${TMP_FOLDER} ]] && TMP_FOLDER=/tmp/cntools
+[[ -z ${TIMEOUT_NO_OF_SLOTS} ]] && TIMEOUT_NO_OF_SLOTS=60
+[[ -z ${TIMEOUT_LEDGER_STATE} ]] && TIMEOUT_LEDGER_STATE=300
+[[ -z ${VERBOSITY} ]] && VERBOSITY=0
+[[ -z ${SHELLEY_TRANS_FILENAME} ]] && SHELLEY_TRANS_FILENAME="${CNODE_HOME}/guild-db/shelley_trans_epoch"
+[[ ${SHELLEY_TRANS_FILENAME} =~ ^${CNODE_HOME}/db/ ]] && mkdir -p "${CNODE_HOME}/guild-db" && SHELLEY_TRANS_FILENAME="${CNODE_HOME}/guild-db/shelley_trans_epoch"
+[[ -z ${CNTOOLS_LOG} ]] && CNTOOLS_LOG="${CNODE_HOME}/logs/cntools-history.log"
+[[ -z ${WALLET_SELECTION_FILTER_LIMIT} ]] && WALLET_SELECTION_FILTER_LIMIT=10
+[[ -z ${KES_ALERT_PERIOD} ]] && KES_ALERT_PERIOD=172800 # default 2 days
+[[ -z ${KES_WARNING_PERIOD} ]] && KES_WARNING_PERIOD=604800 # default 7 days
+[[ $(uname) == Darwin ]] && ENABLE_CHATTR=false
+[[ -z ${ENABLE_CHATTR} ]] && ENABLE_CHATTR=true
 
 ############################################################
 # library sourced by cntools with common taskes to perform #
@@ -39,6 +56,7 @@ log() {
 # Description: wait for user keypress to continue
 waitForInput() {
   ESC=$(printf "\033")
+  local row=$(get_cursor_row)
   say ""
   if [[ -z $1 ]]; then
     message="press any key to return to home menu"
@@ -49,6 +67,8 @@ waitForInput() {
   if [[ $key == $ESC ]]; then
     read -rsn2 key # read 2 more chars
   fi
+  cursor_to ${row}
+  tput ed
 }
 
 
@@ -78,8 +98,7 @@ say() {
 #   >> need_cmd "jq"
 need_cmd() {
   if ! command -v "$1" > /dev/null 2>&1; then
-    say "${RED}ERROR${NC}: need '$1' (command not found)" "try 'sudo apt install $1'"
-    say "please install with your packet manager of choice(apt/yum etc..) and relaunch cntools"
+    say "${FG_RED}ERROR${NC}: need '$1' (command not found)\ntry 'sudo apt install $1'\nplease install with your packet manager of choice(apt/yum etc..) and relaunch CNTools"
     return 1
   fi
 }
@@ -92,24 +111,137 @@ need_cmd() {
 # Examples of Usage:
 #   >> protectionPreRequisites
 protectionPreRequisites() {
-  if ! need_cmd "gpg" || \
-     ! need_cmd "systemd-ask-password" || \
-     ! need_cmd "chattr"; then
+  if ! need_cmd "gpg"; then
     return 1
   fi
 
-  touch "${TMP_FOLDER}"/test
-  if ! sudo -n chattr -i "${TMP_FOLDER}"/test 2>&1; then
+  if ! need_cmd "chattr" &>/dev/null; then
+    [[ ${ENABLE_CHATTR} = true ]] && say "chattr command not available but enabled in config, please install or disable in cntools.config and re-run CNTools" && return 1
+  elif [[ ${ENABLE_CHATTR} = true ]]; then # chattr available and enabled, make sure sudo access to chattr is enabled
+    touch "${TMP_FOLDER}"/test
+    echo "Testing chattr access permission, enter user password if requested..."
+    if ! sudo chattr -i "${TMP_FOLDER}"/test 2>&1; then
+      rm -f "${TMP_FOLDER}"/test
+      say ""
+      say "${FG_YELLOW}WARN${NC}: Elevated privileges needed for chattr command used to write protect wallet and pool keys"
+      say "Add required sudo permissions or run the following command to add passwordless sudo access to chattr command for '$(whoami)' user"
+      say ""
+      say "echo \"$(whoami) ALL=NOPASSWD: $(command -v chattr)\" | sudo tee /etc/sudoers.d/cntools"
+      return 1
+    fi
     rm -f "${TMP_FOLDER}"/test
-    say ""
-    say "${ORANGE}WARN${NC}: Elevated privileges needed for chattr command used to write protect wallet and pool keys"
-    say "Run the following command to add passwordless sudo access to chattr command for '$(whoami)' user"
-    say ""
-    say "sudo echo \"$(whoami) ALL=NOPASSWD: $(command -v chattr)\" >> /etc/sudoers"
-    waitForInput
+  fi
+}
+
+# Command    : safeDel [path]
+# Description: unlock and use secure delete (srm) if available to delete file|dir
+# Note       : srm mainly effective for traditional magnetic HDDs and non copy-on-write or journal file systems
+safeDel() {
+  path=$1
+  [[ ${ENABLE_CHATTR} = true && -f "${path}" && $(lsattr -R "${path}") =~ -i- ]] && sudo chattr -i "${path}"
+  command -v "srm" > /dev/null 2>&1 && delcommand='srm' || delcommand='rm'
+  if "${delcommand}" -rf "${path}"; then
+    say "Deleted: ${path}" "log"
+  else
+    say "${FG_RED}ERROR${NC}: delete failed for ${path}" 1>&2
     return 1
   fi
-  rm -f "${TMP_FOLDER}"/test
+}
+
+
+dialogSetup() {
+  export DIALOGRC="${TMP_FOLDER}"/.dialogrc
+  [[ ! -f ${DIALOGRC} ]] && cat << EOF > "${TMP_FOLDER}"/.dialogrc
+# Types of values:
+#
+# Number     -  <number>
+# String     -  "string"
+# Boolean    -  <ON|OFF>
+# Attribute  -  (foreground,background,highlight?)
+# Set aspect-ration.
+aspect = 0
+# Set separator (for multiple widgets output).
+separate_widget = ""
+# Set tab-length (for textbox tab-conversion).
+tab_len = 0
+# Make tab-traversal for checklist, etc., include the list.
+visit_items = OFF
+# Shadow dialog boxes? This also turns on color.
+use_shadow = OFF
+# Turn color support ON or OFF
+use_colors = OFF
+# Screen color
+screen_color = (BLACK,BLACK,OFF)
+# Shadow color
+shadow_color = (BLACK,BLACK,ON)
+# Dialog box color
+dialog_color = (BLACK,BLACK,OFF)
+# Dialog box title color
+title_color = (RED,BLACK,ON)
+# Dialog box border color
+border_color = (BLACK,BLACK,OFF)
+# Active button color
+button_active_color = (WHITE,BLACK,ON)
+# Inactive button color
+button_inactive_color = (BLACK,WHITE,OFF)
+# Active button key color
+button_key_active_color = button_active_color
+# Inactive button key color
+button_key_inactive_color = (RED,BLACK,OFF)
+# Active button label color
+button_label_active_color = (YELLOW,BLACK,OFF)
+# Inactive button label color
+button_label_inactive_color = (BLACK,WHITE,ON)
+# Input box color
+inputbox_color = button_inactive_color
+# Input box border color
+inputbox_border_color = button_inactive_color
+# Item color
+item_color = button_inactive_color
+# Selected item color
+item_selected_color = button_active_color
+# Dialog box border2 color
+border2_color = button_inactive_color
+# Input box border2 color
+inputbox_border2_color = button_inactive_color
+EOF
+}
+
+# Command    : fileDialog [show help: 0=no|1=yes] [dialog title] [optional: start dir]
+# Description: open a file dialog
+fileDialog() {
+  dialogSetup
+  local firstrow=$(get_cursor_row)
+  [[ -n $3 ]] && start_path="$3" || start_path="/tmp/"
+  if [[ $1 -eq 1 ]]; then
+    say "\nFile Explorer:"
+    say "  Tab        -  Select area to navigate"
+    say "  Arrow keys -  Move up/down"
+    say "  Space      -  Append the currently-selected item into the work-area"
+    say "  Enter      -  OK and exit by default if not Cancel is selected"
+    waitForInput "Press any key to open the file explorer"
+  fi
+  file=$(dialog --stdout --clear --keep-tite --title "$2" --fselect "${start_path}" $(($(tput lines)-14)) $(($(tput cols)-10)))
+  cursor_to ${firstrow}
+  tput ed
+}
+# Command    : dirDialog [show help: 0=no|1=yes] [dialog title] [optional: start dir]
+# Description: open a directory dialog
+dirDialog() {
+  dialogSetup
+  local firstrow=$(get_cursor_row)
+  [[ -n $3 ]] && start_path="$3/" || start_path="/tmp/"
+  if [[ $1 -eq 1 ]]; then
+    say "\nDirectory Explorer:"
+    say "  Tab        -  Select area to navigate"
+    say "  Arrow keys -  Move up/down"
+    say "  Space      -  Append the currently-selected item into the work-area"
+    say "  Enter      -  OK and exit by default if not Cancel is selected"
+    waitForInput "Press any key to open the directory explorer"
+  fi
+  dir=$(dialog --stdout --clear --keep-tite --title "$2" --dselect "${start_path}" $(($(tput lines)-14)) $(($(tput cols)-10)))
+  cursor_to ${firstrow}
+  tput ed
 }
 
 
@@ -121,37 +253,35 @@ protectionPreRequisites() {
 # Examples of Usage:
 #   >> selectOption MyWallet1 MyWallet2 Cancel
 #
-function selectOption {
-  # little helpers for terminal print control and key input
-  ESC=$(printf "\033")
-  cursor_blink_on()  { printf "$ESC[?25h"; }
-  cursor_blink_off() { printf "$ESC[?25l"; }
-  cursor_to()        { printf "$ESC[$1;${2:-1}H"; }
-  print_option()     { printf "  $1 "; }
-  print_selected()   { printf " $ESC[7m $1 $ESC[27m$2"; }
-  get_cursor_row()   { IFS=';' read -sdR -p $'\E[6n' ROW COL; echo ${ROW#*[}; }
-  key_input()        { key2=""
-                       read -rsn1 key1   # get 1 character
-                       if [[ $key1 == $ESC ]]; then
-                         read -rsn2 -t 0.3 key2 # read 2 more chars, 1s timeout
-                       fi
-                         if [[ $key2 = "[A" ]]; then echo up;
-                       elif [[ $key2 = "[B" ]]; then echo down;
-                       elif [[ $key1 = $ESC && $key2 = "" ]]; then echo Esc;
-                       elif [[ $key1 = ""   ]]; then echo enter;
-                       else echo $key1; fi; }
-  opt_shortcut()     { [[ "$1" =~ ^\[([[:alnum:]]+)\].* ]] && echo ${BASH_REMATCH[1]}; }
-  opt_firstchar()    { printf "${1:0:1}" | tr '[:upper:]' '[:lower:]'; }
+# little helpers for terminal print control and key input
+ESC=$(printf "\033")
+cursor_blink_on()  { printf "$ESC[?25h"; }
+cursor_blink_off() { printf "$ESC[?25l"; }
+cursor_to()        { printf "$ESC[$1;${2:-1}H"; }
+print_option()     { printf "  $1 "; }
+print_selected()   { printf " $ESC[7m $1 $ESC[27m$2"; }
+get_cursor_row()   { IFS=';' read -sdR -p $'\E[6n' ROW COL; echo ${ROW#*[}; }
+key_input()        { key2=""
+                     read -rsn1 key1   # get 1 character
+                     if [[ $key1 == $ESC ]]; then
+                       read -rsn2 -t 0.3 key2 # read 2 more chars, 1s timeout
+                     fi
+                       if [[ $key2 = "[A" ]]; then echo up;
+                     elif [[ $key2 = "[B" ]]; then echo down;
+                     elif [[ $key1 = $ESC && $key2 = "" ]]; then echo Esc;
+                     elif [[ $key1 = ""   ]]; then echo enter;
+                     else echo $key1; fi; }
+opt_shortcut()     { [[ "$1" =~ ^\[([[:alnum:]]+)\].* ]] && echo ${BASH_REMATCH[1]}; }
+opt_firstchar()    { printf "${1:0:1}" | tr '[:upper:]' '[:lower:]'; }
 
+selectOption() {  
   # initially print empty new lines (scroll down if at bottom of screen)
-  for opt; do printf "\n"; done
+  printf "\n" && for opt; do printf "\n"; done
 
   # determine current screen position for overwriting the options
   local lastrow=$(get_cursor_row)
-  local startrow=$(($lastrow - $#))
+  local startrow=$(($lastrow - $# - 1))
 
-  # ensure cursor and input echoing back on upon a ctrl+c during read -s
-  trap "cursor_blink_on; stty echo; printf '\n'; exit" 2
   cursor_blink_off
 
   local shortcut_found="no"
@@ -202,17 +332,19 @@ function selectOption {
     esac
   done
 
-  # cursor position back to normal
-  cursor_to $lastrow
-  printf "\n"
+  # clear menu
+  cursor_to $startrow
+  tput ed
   cursor_blink_on
 
   return $selected
 }
+
 function select_opt {
-  selectOption "$@" 1>&2
+  local opts=( "$@" )
+  selectOption "${opts[@]}" 1>&2
   local answer=$?
-  echo $answer
+  say "Selected value: ${opts[${answer}]}"
   return $answer
 }
 
@@ -249,7 +381,7 @@ function validIP()
 #
 function getDirs {
   if [[ ! -d "$1" ]]; then
-    say "${RED}ERROR${NC}: Missing folder: $1" 0
+    say "${FG_RED}ERROR${NC}: Missing folder: $1" 0
     waitForInput && return 1
   fi
   dirs=()
@@ -259,19 +391,152 @@ function getDirs {
   return 0
 }
 
-# Command    : selectDir [dir1 dir2 ...]
+# Command    : selectDir [type] [dir1 dir2 ...]
 # Description: A helper function to selectOption() specifically for directory selection
-# Parameters : array of dirs    >   array of dirs to include in selection, '[Esc] Cancel' option added to all selections
+# Parameters : type             >   'wallet' or 'pool' 
+#            : array of dirs    >   array of dirs to include in selection, '[Esc] Cancel' option added to all selections
 # Return     : populates ${dir_name} variable,
 # Examples of Usage:
 #   >> selectDir Wallet1 Wallet2 Wallet3
 #
 function selectDir {
-  dirs=("$@")
+  local type=$1 && shift
+  dirs=( "$@" )
   dirs+=("[Esc] Cancel")
   selectOption "${dirs[@]}" 1>&2
   dir_name=${dirs[$?]}
-  [[ "${dir_name}" = "[Esc] Cancel" ]] && return 1 || return 0
+  [[ "${dir_name}" = "[Esc] Cancel" ]] && return 1
+  say "Selected ${type}: ${dir_name}"
+}
+
+# Command    : selectWallet [mode] [file1 file2 ...]
+# Description: A helper function to selecrt a CNTools wallet
+# Parameters : mode            >  a string containing some of the following: none|non-reg|reg|balance|delegate|reward
+#                                 to be added next to wallet in selection menu
+#              array of files  >  array of files required to exist in wallet folder for it to be selectable
+# Return     : populates ${wallet_name} variable,
+# Examples of Usage:
+#   >> selectWallet wallet/MyWallet/payment.skey
+#
+function selectWallet {
+  wallet_dirs=()
+  mode=$1 && shift
+  enc_req_files=0
+  if ! getDirs "${WALLET_FOLDER}"; then return 1; fi # dirs() array populated with all wallet folders
+  if [[ ${CNTOOLS_MODE} = "CONNECTED" && ${mode} != "none" ]]; then
+    wallet_count=${#dirs[@]}
+    [[ ${wallet_count} -le ${WALLET_SELECTION_FILTER_LIMIT} ]] && tput sc && say "Balance checking wallets..."
+  fi
+  for dir in "${dirs[@]}"; do
+    for req_file in "$@"; do # check if wallet is missing a required file and if so hide it
+      [[ -f "${WALLET_FOLDER}/${dir}/${req_file}.gpg" ]] && ((enc_req_files++))
+      [[ ! -f "${WALLET_FOLDER}/${dir}/${req_file}" ]] && continue 2
+    done
+    if [[ ${CNTOOLS_MODE} = "CONNECTED" && ${mode} != "none" && ${wallet_count} -le ${WALLET_SELECTION_FILTER_LIMIT} ]]; then
+      if [[ ${mode} = "non-reg" ]]; then
+        if isWalletRegistered ${dir}; then continue; fi
+      elif [[ ${mode} = "reg" ]]; then
+        if ! isWalletRegistered ${dir}; then continue; fi
+      fi
+      if [[ ${mode} = "balance" || ${mode} = "non-reg" || ${mode} = "reg" ]]; then
+        getBaseAddress ${dir}
+        getPayAddress ${dir}
+        getBalance ${base_addr}
+        base_lovelace=${lovelace}
+        getBalance ${pay_addr}
+        pay_lovelace=${lovelace}
+        if [[ ${base_lovelace} -gt 0 && ${pay_lovelace} -gt 0 ]]; then
+          wallet_dirs+=("${dir} (Funds: ${FG_CYAN}$(formatLovelace ${base_lovelace})${NC} ADA | Enterprise Funds: ${FG_CYAN}$(formatLovelace ${pay_lovelace})${NC} ADA)")
+        elif [[ ${pay_lovelace} -gt 0 ]]; then
+          wallet_dirs+=("${dir} (Enterprise Funds: ${FG_CYAN}$(formatLovelace ${pay_lovelace})${NC} ADA)")
+        else
+          wallet_dirs+=("${dir} (Funds: ${FG_CYAN}$(formatLovelace ${base_lovelace})${NC} ADA)")
+        fi
+      elif [[ ${mode} = "delegate" ]]; then
+        getBaseAddress ${dir}
+        getBalance ${base_addr}
+        if getRewardAddress ${dir}; then
+          delegation_pool_id=$(${CCLI} query stake-address-info ${ERA_IDENTIFIER} ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --address "${reward_addr}" | jq -r '.[0].delegation // empty')
+          unset poolName
+          if [[ -n ${delegation_pool_id} ]]; then
+            while IFS= read -r -d '' pool; do
+              getPoolID "$(basename ${pool})"
+              if [[ "${pool_id_bech32}" = "${delegation_pool_id}" ]]; then
+                poolName=$(basename ${pool}) && break
+              fi
+            done < <(find "${POOL_FOLDER}" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+          fi
+          if [[ -n ${poolName} ]]; then
+            wallet_dirs+=("${dir} (${FG_CYAN}$(formatLovelace ${lovelace})${NC} ADA - ${FG_RED}delegated${NC} to ${FG_BLUE}${poolName}${NC})")
+          elif [[ -n ${delegation_pool_id} ]]; then
+            wallet_dirs+=("${dir} (${FG_CYAN}$(formatLovelace ${lovelace})${NC} ADA - ${FG_RED}delegated${NC} to external address)")
+          else
+            wallet_dirs+=("${dir} (${FG_CYAN}$(formatLovelace ${lovelace})${NC} ADA)")
+          fi
+        else
+          wallet_dirs+=("${dir} (${FG_CYAN}$(formatLovelace ${lovelace})${NC} ADA)")
+        fi
+      elif [[ ${mode} = "reward" ]]; then
+        getRewards ${dir}
+        [[ ${reward_lovelace} -le 0 ]] && continue
+        wallet_dirs+=("${dir} (Rewards: ${FG_CYAN}$(formatLovelace ${reward_lovelace})${NC} ADA)")
+      fi
+    else
+      wallet_dirs+=("${dir}")
+    fi
+  done
+  if [[ ${CNTOOLS_MODE} = "CONNECTED" && ${mode} != "none" ]]; then tput rc && tput ed; fi
+  if [[ ${#wallet_dirs[@]} -eq 0 ]]; then
+    if [[ ${mode} = "balance" ]]; then
+      say "${FG_YELLOW}WARN${NC}: No wallets with funds available for selection!"
+    elif [[ ${mode} = "delegate" ]]; then
+      say "${FG_YELLOW}WARN${NC}: No wallets available that can be delegated or used as pool pledge/owner/reward wallet!"
+    elif [[ ${mode} = "reward" ]]; then
+      say "${FG_YELLOW}WARN${NC}: No wallets available that have rewards to withdraw!"
+    else
+      say "${FG_YELLOW}WARN${NC}: No wallets available for selection!"
+    fi
+    [[ ${enc_req_files} -gt 0 ]] && say "Encrypted wallets not listed, please decrypt wallet first if encrypted"
+    return 1
+  fi
+  [[ ${enc_req_files} -gt 0 ]] && say "${FG_YELLOW}encrypted wallets found but NOT listed, please decrypt to select${NC}"
+  if ! selectDir "wallet" "${wallet_dirs[@]}"; then return 1; fi # ${dir_name} populated by selectDir function
+  wallet_name="$(echo ${dir_name} | cut -d' ' -f1)"
+}
+
+# Command    : selectPool [mode] [file1 file2 ...]
+# Description: A helper function to selecrt a CNTools pool
+# Parameters : mode            >  a string containing some of the following: reg|non-reg
+#              array of files  >  array of files required to exist in pool folder for it to be selectable
+# Return     : populates ${pool_name} variable,
+# Examples of Usage:
+#   >> selectPool pool/MyPool/cold.skey
+#
+function selectPool {
+  pool_dirs=()
+  mode=$1 && shift
+  enc_req_files=0
+  if ! getDirs "${POOL_FOLDER}"; then return 1; fi # dirs() array populated with all pool folders
+  for dir in "${dirs[@]}"; do
+    for req_file in "$@"; do # check if pool is missing a required file and if so hide it
+      [[ -f "${POOL_FOLDER}/${dir}/${req_file}.gpg" ]] && ((enc_req_files++))
+      [[ ! -f "${POOL_FOLDER}/${dir}/${req_file}" ]] && continue 2
+    done
+    if [[ ${mode} = "non-reg" ]]; then
+      [[ -f "${POOL_FOLDER}/${dir}/${POOL_REGCERT_FILENAME}" ]] && continue
+    elif [[ ${mode} = "reg" ]]; then
+      [[ ! -f "${POOL_FOLDER}/${dir}/${POOL_REGCERT_FILENAME}" ]] && continue
+    fi
+    pool_dirs+=("${dir}")
+  done
+  if [[ ${#pool_dirs[@]} -eq 0 ]]; then
+    say "${FG_YELLOW}WARN${NC}: No pools available that can be selected!"
+    [[ ${enc_req_files} -gt 0 ]] && say "* Encrypted pools not listed *"
+    return 1
+  fi
+  [[ ${enc_req_files} -gt 0 ]] && say "${FG_YELLOW}encrypted pools found but NOT listed, please decrypt to show${NC}"
+  if ! selectDir "pool" "${pool_dirs[@]}"; then return 1; fi # ${dir_name} populated by selectDir function
+  pool_name="${dir_name}"
 }
 
 
@@ -283,31 +548,46 @@ function selectDir {
 #   >> local userPassword=$(getPassword confirm)
 getPassword() {
   while true; do
-    say "Enter key password (length >= 8)"
-    password=$(systemd-ask-password "Password:")
+    readPassword "Enter password (length >= 8)"
+    password=${read_password} && unset read_password
     if [ ${#password} -lt 8 ]; then
       say ""
-      say "${RED}ERROR${NC}: password length too short, please use a minimum of 8 characters."
+      say "${FG_RED}ERROR${NC}: password length too short, please use a minimum of 8 characters."
       say ""
       read -r -n 1 -s -p "Press q to abort or any other key to retry" abort
-      [[ ${abort} = "q" ]] && return 1
+      [[ ${abort} = "q" ]] && unset password && return 1
       say "\n"
       continue
     fi
     if [[ "$1" = "confirm" ]]; then
-      local checkPassword=$(systemd-ask-password "Confirm: ")
-      if [[ "${password}" != "${checkPassword}" ]]; then
+      echo && readPassword "Confirm password"
+      check_password=${read_password} && unset read_password
+      if [[ "${password}" != "${check_password}" ]]; then
         say ""
-        say "${RED}ERROR${NC}: password missmatch!"
+        say "${FG_RED}ERROR${NC}: password missmatch!"
         say ""
         read -r -n 1 -s -p "Press q to abort or any other key to retry" abort
-        [[ ${abort} = "q" ]] && return 1
+        [[ ${abort} = "q" ]] && unset password && unset check_password && return 1
         say "\n"
       else
-        say "" && return
+        say "" && unset check_password && return
       fi
     else
       say "" && return
+    fi
+  done
+}
+readPassword() {
+  read_password=""
+  prompt="$1: "
+  while IFS= read -p "${prompt}" -r -s -n 1 char; do
+    if [[ ${char} == $'\0' ]]; then break; fi
+    if [[ ${char} == $'\b' ]]; then
+      [[ ${#read_password} -gt 0 ]] && printf "\033[1D\033[0K" && read_password=${read_password%?}
+      prompt=''
+    else
+      prompt='*'
+      read_password+="${char}"
     fi
   done
 }
@@ -323,8 +603,8 @@ getPassword() {
 #   >> encryptFile "$CNODE_HOME/priv/wallet/MyWallet/SigningKeyShelley.skey"
 encryptFile() {
   echo "${2}" | gpg --symmetric --yes --batch --cipher-algo AES256 --passphrase-fd 0 --output "${1}.gpg" "${1}" >/dev/null && \
-  rm -f "${1}" || {
-    say "${RED}ERROR${NC}: failed to encrypt ${1}"
+  safeDel "${1}" >/dev/null || {
+    say "${FG_RED}ERROR${NC}: failed to encrypt ${1}"
     return 1
   }
   say "${1} successfully encrypted" "log"
@@ -342,50 +622,53 @@ encryptFile() {
 decryptFile() {
   echo "${2}" | gpg --decrypt --batch --yes --passphrase-fd 0 --output "${1%.*}" "${1}" >/dev/null && \
   rm -f "${1}" || {
-    say "${RED}ERROR${NC}: failed to decrypt ${1}"
+    say "${FG_RED}ERROR${NC}: failed to decrypt ${1}"
     return 1
   }
   say "${1} successfully decrypted" "log"
 }
 
 
+# Command    : getNodeMetrics
+# Description: Get latest metrics from the node
+# Return     : populates ${node_metrics} variable
+getNodeMetrics() {
+  node_metrics=$(curl -s -m ${EKG_TIMEOUT} -H 'Accept: application/json' "http://${EKG_HOST}:${EKG_PORT}/" 2>/dev/null)
+}
+
 # Command    : getBlockTip
 # Description: Get latest block number
 # Return     : string with tip on STDOUT
 getBlockTip() {
-  $CCLI shelley query tip ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} | jq -r '.blockNo'
+  getNodeMetrics
+  jq '.cardano.node.ChainDB.metrics.blockNum.int.val //0' <<< "${node_metrics}"
 }
 # Command    : getSlotTip
 # Description: Get latest slot number
 # Return     : string with tip on STDOUT
 getSlotTip() {
-  $CCLI shelley query tip ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} | jq -r '.slotNo'
+  getNodeMetrics
+  jq '.cardano.node.ChainDB.metrics.slotNum.int.val //0' <<< "${node_metrics}"
 }
 # Command    : getSlotTipRef
-# Description: Get calculated slot number tip
+# Description: Offline calculation of reference tip
 # Return     : string with tip on STDOUT
 getSlotTipRef() {
-  shelley_genesis_start_time_sec=$(date --date=$(jq -r .systemStart "${GENESIS_JSON}") +%s)
-  epoch_length=$(jq -r .epochLength "${GENESIS_JSON}")
-  slot_length=$(jq -r .slotLength "${GENESIS_JSON}")
   current_time_sec=$(date -u +%s)
-  
   if [[ "${PROTOCOL_IDENTIFIER}" = "--cardano-mode" ]]; then
     # Combinator network
-    byron_genesis_start_time_sec=$(jq -r .startTime "${BYRON_GENESIS_JSON}")
-    byron_slots=$(( ( shelley_genesis_start_time_sec - byron_genesis_start_time_sec ) / 20 ))
-    byron_shelley_trans_slots=$(( ( $(cat $SHELLEY_TRANS_FILENAME) * epoch_length ) / 20 ))
-    byron_shelley_trans_end=$(( shelley_genesis_start_time_sec + ( $(cat $SHELLEY_TRANS_FILENAME) * epoch_length ) ))
-    if [[ "${current_time_sec}" -lt "${byron_shelley_trans_end}" ]]; then
+    byron_slots=$(( $(cat $SHELLEY_TRANS_FILENAME) * BYRON_EPOCH_LENGTH )) # since this point will only be reached once we're in Shelley phase
+    byron_end_time=$(( BYRON_GENESIS_START_SEC + ( $(cat $SHELLEY_TRANS_FILENAME) * BYRON_EPOCH_LENGTH * BYRON_SLOT_LENGTH ) ))
+    if [[ "${current_time_sec}" -lt "${byron_end_time}" ]]; then
       # In Byron phase
-      echo $(( byron_slots + ( current_time_sec - shelley_genesis_start_time_sec ) / 20 ))
+      echo $(( ( current_time_sec - BYRON_GENESIS_START_SEC ) / BYRON_SLOT_LENGTH ))
     else
       # In Shelley phase
-      echo $(( byron_slots + byron_shelley_trans_slots + (( current_time_sec - byron_shelley_trans_end ) / slot_length ) ))
+      echo $(( byron_slots + (( current_time_sec - byron_end_time ) / SLOT_LENGTH ) ))
     fi
   else
     # Shelley Mode only, no Byron slots
-    echo $(( ( current_time_sec - shelley_genesis_start_time_sec ) / slot_length ))
+    echo $(( ( current_time_sec - SHELLEY_GENESIS_START_SEC ) / SLOT_LENGTH ))
   fi
 }
 # Command    : getSlotTipDiff
@@ -397,75 +680,67 @@ getSlotTipDiff() {
   echo $(( tip_ref - tip_node ))
 }
 
+# Command    : slotInterval
+# Description: Calculate expected interval between blocks
 slotInterval() {
-  slot_length=$(jq -r .slotLength "${GENESIS_JSON}")
-  active_slots_coeff=$(jq -r .activeSlotsCoeff "${GENESIS_JSON}")
-  decentralisation=$(jq -r .protocolParams.decentralisationParam "${GENESIS_JSON}")
-  echo "(${slot_length} / ${active_slots_coeff} / ${decentralisation}) + 0.5" | bc -l | awk '{printf "%.0f\n", $1}'
+  [[ $(echo "${DECENTRALISATION} < 0.5" | bc) -eq 1 ]] && local d=0.5 || local d=${DECENTRALISATION}
+  echo "(${SLOT_LENGTH} / ${ACTIVE_SLOTS_COEFF} / ${d}) + 0.5" | bc -l | awk '{printf "%.0f\n", $1}'
 }
 
 # Command    : getEpoch
 # Description: Offline calculation of current epoch based on genesis file
 # Return     : current epoch on STDOUT
 getEpoch() {
-  genesis_start_time_sec=$(date --date=$(jq -r .systemStart "${GENESIS_JSON}") +%s)
   current_time_sec=$(date -u +%s)
-  epoch_length=$(jq -r .epochLength "${GENESIS_JSON}")
-  current_epoch=$(( ( current_time_sec - genesis_start_time_sec ) / epoch_length ))
-  echo "${current_epoch}"
+  if [[ "${PROTOCOL_IDENTIFIER}" == "--cardano-mode" ]]; then
+    byron_end_time=$(( BYRON_GENESIS_START_SEC + ( $(cat $SHELLEY_TRANS_FILENAME) * BYRON_EPOCH_LENGTH * BYRON_SLOT_LENGTH ) ))
+    echo $(( $(cat $SHELLEY_TRANS_FILENAME) + ( (current_time_sec - byron_end_time) / SLOT_LENGTH / EPOCH_LENGTH ) ))
+  else
+    echo $(( (current_time_sec - SHELLEY_GENESIS_START_SEC) / SLOT_LENGTH / EPOCH_LENGTH ))
+  fi
 }
 # Command    : getTimeUntilNextEpoch
 # Description: Offline calculation of time until next epoch
 # Return     : time left in hh:mm:ss
 timeUntilNextEpoch() {
-  getEpoch >/dev/null
-  showTimeLeft $(( epoch_length - ( current_time_sec - genesis_start_time_sec ) + ( current_epoch * epoch_length ) ))
+  current_epoch=$(getEpoch)
+  current_time_sec=$(date -u +%s)
+  if [[ "${PROTOCOL_IDENTIFIER}" = "--cardano-mode" ]]; then
+    showTimeLeft $(( ($(cat $SHELLEY_TRANS_FILENAME) * BYRON_SLOT_LENGTH * BYRON_EPOCH_LENGTH) + ( ( current_epoch + 1 - $(cat $SHELLEY_TRANS_FILENAME) ) * SLOT_LENGTH * EPOCH_LENGTH ) - current_time_sec + BYRON_GENESIS_START_SEC ))
+  else
+    showTimeLeft $(( ( ( ( (current_time_sec - SHELLEY_GENESIS_START_SEC) / SLOT_LENGTH / EPOCH_LENGTH ) + 1 ) * SLOT_LENGTH * EPOCH_LENGTH ) - current_time_sec + SHELLEY_GENESIS_START_SEC ))
+  fi
 }
 
 # Command    : getCurrentKESperiod
-# Description: Offline calculation of the current KES period
-# Return     : current KES period on STDOUT
+# Description: Offline calculation of current KES period based on reference tip
 getCurrentKESperiod() {
-  shelley_genesis_start_time_sec=$(date --date=$(jq -r .systemStart "${GENESIS_JSON}") +%s)
-  epoch_length=$(jq -r .epochLength "${GENESIS_JSON}")
-  slot_length=$(jq -r .slotLength "${GENESIS_JSON}")
-  slots_per_kes_period=$(jq -r .slotsPerKESPeriod "${GENESIS_JSON}")
-  current_time_sec=$(date -u +%s)
-  if [[ "${PROTOCOL_IDENTIFIER}" = "--cardano-mode" ]]; then
-    byron_shelley_trans_end=$(( shelley_genesis_start_time_sec + ( $(cat $SHELLEY_TRANS_FILENAME) * epoch_length ) ))
-    current_kes_period=$(( ( current_time_sec - byron_shelley_trans_end ) / ( slots_per_kes_period * slot_length ) ))
-  else
-    current_kes_period=$(( ( current_time_sec - shelley_genesis_start_time_sec ) / ( slots_per_kes_period * slot_length ) ))
-  fi
-  echo "${current_kes_period}"
+  tip_ref=$(getSlotTipRef)
+  current_kes_period=$(( tip_ref / SLOTS_PER_KES_PERIOD ))
 }
 
-# Command    : kesExpiration [current KES period]
+# Command    : kesExpiration [Pool KES start period]
 #
 # Description: Calculate KES expiration
-# Parameters : current KES period    >   KES start stored in POOL_CURRENT_KES_START file for pool in question
+# Parameters : Pool KES start period    >   KES start stored in POOL_CURRENT_KES_START file for pool in question
 # Return     : expiration date can be accessed through variable ${expiration_date} after function has been executed
 kesExpiration() {
   if [[ -z "${1##*[!0-9]*}" ]]; then
-    say "${RED}ERROR${NC}: current KES period must be an integer number [$1]"
+    say "${FG_RED}ERROR${NC}: KES start period must be an integer number [$1]"
     return 1
   fi
-  max_kes_evolutions=$(jq -r .maxKESEvolutions "${GENESIS_JSON}")
-  kes_expiration_period=$(( ${1} + ${max_kes_evolutions} - 1 ))
-  shelley_genesis_start_time_sec=$(date --date=$(jq -r .systemStart "${GENESIS_JSON}") +%s)
-  epoch_length=$(jq -r .epochLength "${GENESIS_JSON}")
-  slot_length=$(jq -r .slotLength "${GENESIS_JSON}")
-  slots_per_kes_period=$(jq -r .slotsPerKESPeriod "${GENESIS_JSON}")
-  byron_shelley_trans_end=$(( shelley_genesis_start_time_sec + ( $(cat $SHELLEY_TRANS_FILENAME) * epoch_length ) ))
-  expiration_time_sec=$(( ${byron_shelley_trans_end} + ( ${slot_length} * ${kes_expiration_period} * ${slots_per_kes_period} ) ))
+  pool_kes_start_period=$1
+  getCurrentKESperiod
+  remaining_kes_periods=$(( MAX_KES_EVOLUTIONS - ( current_kes_period - pool_kes_start_period ) ))
   current_time_sec=$(date -u +%s)
+  expiration_time_sec=$(( current_time_sec - ( SLOT_LENGTH * (tip_ref % SLOTS_PER_KES_PERIOD) ) + ( SLOT_LENGTH * SLOTS_PER_KES_PERIOD * remaining_kes_periods ) ))
   expiration_time_sec_diff=$(( expiration_time_sec - current_time_sec ))
-  expiration_date=$(date --date=@${expiration_time_sec})
+  expiration_date=$(date '+%F %T Z' --date=@${expiration_time_sec})
 }
 
 showTimeLeft() {
   if [[ -z "${1##*[!0-9]*}" ]]; then
-    say "${RED}ERROR${NC}: time must be an integer number [$1]"
+    say "${FG_RED}ERROR${NC}: time must be an integer number [$1]"
     return 1
   fi
   printf '%02dh:%02dm:%02ds\n' $(($1/3600)) $(($1%3600/60)) $(($1%60))
@@ -476,30 +751,26 @@ showTimeLeft() {
 # Description: Wait for a new block to be created
 # Return     : prints progress on STDOUT
 waitNewBlockCreated() {
-  SLOT_DURATION=$(jq -r .slotLength "$GENESIS_JSON")
-  COUNTER=${TIMEOUT_NO_OF_SLOTS}
-  say ""
-  say "Waiting for new block to be created (timeout = ${COUNTER} slots, $(( COUNTER * SLOT_DURATION ))s)" "log"
-  say ""
-  say "${BLUE}INFO${NC}: press any key to cancel balance check and return"
-  say ""
+  counter=${TIMEOUT_NO_OF_SLOTS}
+  say "Waiting for new block to be created (timeout = ${counter} slots, $(( counter * SLOT_LENGTH ))s)" 1 "log"
+  say "${FG_BLUE}INFO${NC}: press any key to cancel balance check and return"
   initialTip=$(getBlockTip)
   actualTip=${initialTip}
 
   while [ "${actualTip}" = "${initialTip}" ]; do
-    read -r -n 1 -s -t ${SLOT_DURATION} -p "" abort
+    read -r -n 1 -s -t ${SLOT_LENGTH} -p "" abort
     if [[ $? -eq 0 ]]; then
-      say "${BLUE}INFO${NC}: Balance check aborted!" "log"
+      say "${FG_BLUE}INFO${NC}: Balance check aborted!"
       return 1
     fi
     actualTip=$(getBlockTip)
-    COUNTER=$((COUNTER - SLOT_DURATION))
-    if [ ${COUNTER} -lt ${SLOT_DURATION} ]; then
-      say "${ORANGE}WARN${NC}: waited $(( TIMEOUT_NO_OF_SLOTS * SLOT_DURATION )) secs and no new block created" "log"
+    counter=$((counter - SLOT_LENGTH))
+    if [ ${counter} -lt ${SLOT_LENGTH} ]; then
+      say "${FG_YELLOW}WARN${NC}: waited $(( TIMEOUT_NO_OF_SLOTS * SLOT_LENGTH )) secs and no new block created"
       return 1
     fi
   done
-  say "New block was created - ${actualTip}" "log"
+  say "New block was created - ${actualTip}" 1 "log"
 }
 
 
@@ -519,15 +790,29 @@ validateDecimalNbr() {
 }
 
 # Command    : formatLovelace
-# Description: Pretty print Lovelace value using locales
+# Description: Pretty print Lovelace value
 # Parameters : Lovelace  >  Amount in Lovelace
-# Return     : Formatted string (warning: the string can contain unicode characters in some locales)
+# Return     : Formatted string
 formatLovelace() {
   re_int_nbr='^[0-9]+$'
   if [[ $1 =~ ${re_int_nbr} ]]; then
-    printf "%'.6f" ${1}e-6
+    [[ $1 -le 999999 ]] && printf $1 && return
+    printf '%s.%s' "$(sed ':a;s/\B[0-9]\{3\}\>/,&/;ta' <<< ${1::-6})" "${1: -6}"
   else
-    say "${RED}ERROR${NC}: must be a valid integer number"
+    say "${FG_RED}ERROR${NC}: must be a valid integer number"
+    return 1
+  fi
+}
+# Command    : formatAda
+# Description: Pretty print Ada value
+# Parameters : Ada  >  Amount in Ada
+# Return     : Formatted string
+formatAda() {
+  re_int_nbr='^[0-9]+$'
+  if [[ $1 =~ ${re_int_nbr} ]]; then
+    sed ':a;s/\B[0-9]\{3\}\>/,&/;ta' <<< $1
+  else
+    say "${FG_RED}ERROR${NC}: must be a valid integer number"
     return 1
   fi
 }
@@ -542,7 +827,7 @@ ADAtoLovelace() {
   if validateDecimalNbr $1; then
     echo "$1 * 1000000 / 1" | bc # /1 is to remove decimals from bc command
   else
-    say "${RED}ERROR${NC}: must be a valid integer or decimal number"
+    say "${FG_RED}ERROR${NC}: must be a valid integer or decimal number"
     return 1
   fi
 }
@@ -556,13 +841,13 @@ ADAtoLovelace() {
 pctToFraction() {
   if validateDecimalNbr $1; then
     if [[ $(bc <<< "$1 >= 0" ) -eq 0 || $(bc <<< "$1 <= 100" ) -eq 0 ]]; then
-      say "${RED}ERROR${NC}: must be a number between 0-100"
+      say "${FG_RED}ERROR${NC}: must be a number between 0-100"
       return 1
     else
       echo "x=$1 / 100; if(x<1) print 0; x" | bc -l | sed '/\./ s/\.\{0,1\}0\{1,\}$//'
     fi
   else
-    say "${RED}ERROR${NC}: must be a valid integer or decimal number"
+    say "${FG_RED}ERROR${NC}: must be a valid integer or decimal number"
     return 1
   fi
 }
@@ -581,9 +866,32 @@ fractionToPCT() {
       echo 0
     fi
   else
-    say "${RED}ERROR${NC}: must be a valid decimal number"
+    say "${FG_RED}ERROR${NC}: must be a valid decimal number"
     return 1
   fi
+}
+
+
+# Command    : getPoolID [pool name]
+# Description: create and save pool id in hex & bech32 encoded format
+# Return     : populates $pool_id & $pool_id_bech32
+getPoolID() {
+  pool_id_file="${POOL_FOLDER}/${1}/${POOL_ID_FILENAME}"
+  pool_id=""
+  pool_id_bech32_file="${POOL_FOLDER}/${1}/${POOL_ID_FILENAME}-bech32"
+  pool_id_bech32=""
+  pool_coldkey_vk_file="${POOL_FOLDER}/${1}/${POOL_COLDKEY_VK_FILENAME}"
+  if [[ -f ${pool_coldkey_vk_file} ]]; then
+    if ! pool_id=$(${CCLI} stake-pool id --cold-verification-key-file "${pool_coldkey_vk_file}" --output-format hex 2>/dev/null) || \
+       ! pool_id_bech32=$(${CCLI} stake-pool id --cold-verification-key-file "${pool_coldkey_vk_file}" 2>/dev/null); then
+      return 1
+    fi
+    echo ${pool_id} > "${pool_id_file}"
+    echo ${pool_id_bech32} > "${pool_id_bech32_file}"
+    return 0
+  fi
+  [[ -f ${pool_id_file} ]] && pool_id=$(cat ${pool_id_file})
+  [[ -f ${pool_id_bech32_file} ]] && pool_id_bech32=$(cat ${pool_id_bech32_file})
 }
 
 
@@ -594,16 +902,13 @@ getPayAddress() {
   payment_vk_file="${WALLET_FOLDER}/${1}/${WALLET_PAY_VK_FILENAME}"
   payment_addr_file="${WALLET_FOLDER}/${1}/${WALLET_PAY_ADDR_FILENAME}"
   if [[ -f "${payment_vk_file}" ]]; then
-    if ${CCLI} shelley address build --payment-verification-key-file "${payment_vk_file}" --out-file "${payment_addr_file}" ${HASH_IDENTIFIER} 2>/dev/null; then
+    if ${CCLI} address build --payment-verification-key-file "${payment_vk_file}" --out-file "${payment_addr_file}" ${NETWORK_IDENTIFIER} 2>/dev/null; then
       pay_addr=$(cat "${payment_addr_file}")
-    else
-      pay_addr=""
-      return 1
+      return 0
     fi
-  else
-    pay_addr=""
-    return 1
   fi
+  pay_addr=""
+  return 1
 }
 
 # Command    : getBaseAddress [wallet name]
@@ -614,12 +919,13 @@ getBaseAddress() {
   stake_vk_file="${WALLET_FOLDER}/${1}/${WALLET_STAKE_VK_FILENAME}"
   base_addr_file="${WALLET_FOLDER}/${1}/${WALLET_BASE_ADDR_FILENAME}"
   if [[ -f "${payment_vk_file}" && -f "${stake_vk_file}" ]]; then
-    ${CCLI} shelley address build --payment-verification-key-file "${payment_vk_file}" --stake-verification-key-file "${stake_vk_file}" --out-file "${base_addr_file}" ${HASH_IDENTIFIER}
-    base_addr=$(cat "${base_addr_file}")
-  else
-    base_addr=""
-    return 1
+    if ${CCLI} address build --payment-verification-key-file "${payment_vk_file}" --stake-verification-key-file "${stake_vk_file}" --out-file "${base_addr_file}" ${NETWORK_IDENTIFIER} 2>/dev/null; then
+      base_addr=$(cat "${base_addr_file}")
+      return 0
+    fi
   fi
+  base_addr=""
+  return 1
 }
 
 # Command    : getRewardAddress [wallet name]
@@ -629,19 +935,20 @@ getRewardAddress() {
   stake_vk_file="${WALLET_FOLDER}/${1}/${WALLET_STAKE_VK_FILENAME}"
   stake_addr_file="${WALLET_FOLDER}/${1}/${WALLET_STAKE_ADDR_FILENAME}"
   if [[ -f "${stake_vk_file}" ]]; then
-    ${CCLI} shelley stake-address build --stake-verification-key-file "${stake_vk_file}" --out-file "${stake_addr_file}" ${HASH_IDENTIFIER}
-    reward_addr=$(cat "${stake_addr_file}")
-  else
-    reward_addr=""
-    return 1
+    if ${CCLI} stake-address build --stake-verification-key-file "${stake_vk_file}" --out-file "${stake_addr_file}" ${NETWORK_IDENTIFIER} 2>/dev/null; then
+      reward_addr=$(cat "${stake_addr_file}")
+      return 0
+    fi
   fi
+  reward_addr=""
+  return 1
 }
 
 # Command    : getAddressInfo [address]
 # Description: get address info from from node
 # Return     : populates $address_info
 getAddressInfo() {
-  address_info=$(${CCLI} shelley address info --address $1)
+  address_info=$(${CCLI} address info --address $1)
 }
 
 # Command    : getBalance [address]
@@ -653,7 +960,7 @@ getBalance() {
 
   [[ -z $1 ]] && return 1
 
-  ${CCLI} shelley query utxo ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --address "${1}" > "${TMP_FOLDER}"/fullUtxo.out
+  if ! ${CCLI} query utxo ${ERA_IDENTIFIER} ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --address "${1}" > "${TMP_FOLDER}"/fullUtxo.out; then return 1; fi
   tail -n +3 "${TMP_FOLDER}"/fullUtxo.out | sort -k3 -nr > "${TMP_FOLDER}"/balance.out
 
   while read -r utxo; do
@@ -699,7 +1006,18 @@ sendADA() {
   say "" 1
   say "# Protocol Parameters" 1 "log"
   currSlot=$(getSlotTip)
-  ttlValue=$(( currSlot + 1000 ))
+  if [[ ${op_mode} = "hybrid" ]]; then
+    say "\nHow long do you want the transaction to be valid?"
+    read -r -p "TTL (in seconds, default: 1800/30min): " ttl_enter
+    if [[ -n ${ttl_enter} && ! ${ttl_enter} =~ ^[0-9]+$ ]]; then
+      say "\n${FG_RED}ERROR${NC}: invalid TTL number, non digit characters found: ${ttl_enter}" 1>&2
+      return 1
+    fi
+    ttlValue=$(( currSlot + (${ttl_enter:-1800}/SLOT_LENGTH) ))
+    echo
+  else
+    ttlValue=$(( currSlot + (600/SLOT_LENGTH) )) # TTL default: 10min
+  fi
   say "Current slot is ${currSlot}, setting ttl to ${ttlValue}" 1 "log"
   getBalance ${sAddr}
 
@@ -724,14 +1042,14 @@ sendADA() {
 
   say "" 1
   say "# Calculate fee, new amount and remaining balance" 1 "log"
-  say "$ ${CCLI} shelley transaction build-raw ${txIn} --tx-out ${dAddr}+${amount} --ttl ${ttlValue} --fee 0 --out-file ${TMP_FOLDER}/tx0.tmp" 2
-  ${CCLI} shelley transaction build-raw ${txIn} --tx-out ${dAddr}+${amount} --ttl ${ttlValue} --fee 0 --out-file "${TMP_FOLDER}"/tx0.tmp
+  say "$ ${CCLI} transaction build-raw ${txIn} --tx-out ${dAddr}+0 --invalid-hereafter ${ttlValue} --fee 0 ${ERA_IDENTIFIER} --out-file ${TMP_FOLDER}/tx0.tmp" 2
+  if ! ${CCLI} transaction build-raw ${txIn} --tx-out ${dAddr}+0 --invalid-hereafter ${ttlValue} --fee 0 ${ERA_IDENTIFIER} --out-file "${TMP_FOLDER}"/tx0.tmp; then return 1; fi
   minFeeArgs=(
-    shelley transaction calculate-min-fee
+    transaction calculate-min-fee
     --tx-body-file "${TMP_FOLDER}"/tx0.tmp
     --tx-in-count ${utxoCount}
     --tx-out-count ${outCount}
-    ${HASH_IDENTIFIER}
+    ${NETWORK_IDENTIFIER}
     --witness-count 1
     --byron-witness-count 0
     --protocol-params-file "${TMP_FOLDER}"/protparams.json
@@ -743,15 +1061,15 @@ sendADA() {
   # Sanity checks
   if [[ ${inclFee} = "no" ]]; then
     if [[ ${balance} -lt $(( amount + minFee )) ]]; then
-      say "${RED}ERROR${NC}: Not enough ADA in address ($(formatLovelace ${balance}) < $(formatLovelace ${amount}) + $(formatLovelace ${minFee}))" 1>&2
+      say "${FG_RED}ERROR${NC}: Not enough ADA in address ($(formatLovelace ${balance}) < $(formatLovelace ${amount}) + $(formatLovelace ${minFee}))" 1>&2
       return 1
     fi
   else
     if [[ ${amount} -lt ${minFee} ]]; then
-      say "${RED}ERROR${NC}: Fee deducted from ADA to send, amount can not be less than fee ($(formatLovelace ${amount}) < $(formatLovelace ${minFee}))" 1>&2
+      say "${FG_RED}ERROR${NC}: Fee deducted from ADA to send, amount can not be less than fee ($(formatLovelace ${amount}) < $(formatLovelace ${minFee}))" 1>&2
       return 1
     elif [[ ${balance} -lt ${amount} ]]; then
-      say "${RED}ERROR${NC}: Not enough ADA in address ($(formatLovelace ${balance}) < $(formatLovelace ${amount}))" 1>&2
+      say "${FG_RED}ERROR${NC}: Not enough ADA in address ($(formatLovelace ${balance}) < $(formatLovelace ${amount}))" 1>&2
       return 1
     fi
   fi
@@ -773,59 +1091,144 @@ sendADA() {
     say "Balance left to be returned in used UTxO's is $(formatLovelace $(( balance - amount ))) ADA ($(formatLovelace ${balance}) - $(formatLovelace ${amount}))" 1 "log"
   fi
 
+  say "" 1
+  say "# Build transaction" 1 "log"
+  
   buildArgs=(
-    shelley transaction build-raw
     ${txIn}
     ${txOut}
-    --ttl ${ttlValue}
+    --invalid-hereafter ${ttlValue}
     --fee ${minFee}
     --out-file "${TMP_FOLDER}"/tx.raw
   )
+  if ! buildTx; then return 1; fi
+  
+  if [[ ${op_mode} = "hybrid" ]]; then
+    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
+      say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
+      return 1
+    fi
+    say "Transaction successfully built and saved to: ${FG_CYAN}${tx_tmp}${NC}" "log"
+    say "Copy file to offline computer and sign it using CNTools in offline mode '-o' [Sign Tx] with:" "log"
+    say "Source wallet ${FG_GREEN}${WALLET_PAY_SK_FILENAME}${NC}" "log"
+    return 2 # return as failed to stop main processing and return to home menu
+  fi
+  
+  say "" 1
+  say "# Sign & Send transaction" 1 "log"
+  
+  if ! signTx "${TMP_FOLDER}/tx.raw" "${sKey}"; then return 1; fi
+  if ! submitTx "${tx_signed}"; then return 1; fi
+}
 
-  signArgs=(
-    shelley transaction sign
-    --tx-body-file "${TMP_FOLDER}"/tx.raw
-    --signing-key-file ${sKey}
-    ${NETWORK_IDENTIFIER}
-    --out-file "${TMP_FOLDER}"/tx.signed
-  )
 
-  submitArgs=(
-    shelley transaction submit
-    --tx-file "${TMP_FOLDER}"/tx.signed
-    ${PROTOCOL_IDENTIFIER}
-    ${NETWORK_IDENTIFIER}
-  )
+# Command     :  sendMetadata [wallet address] [wallet sign key] [metadata file] [metadata type]
+# Description :  post metadata file on chain using specified wallet to pay for the transaction fee
+sendMetadata() {
+  # Handle script arguments
+  addr="$1"
+  payment_sk_file="$2"
+  metafile="$3"
+  if [[ $4 = "no-schema" ]]; then
+    metadata="--json-metadata-no-schema --metadata-json-file ${metafile}"
+  elif [[ $4 = "detailed-schema" ]]; then
+    metadata="--json-metadata-detailed-schema --metadata-json-file ${metafile}"
+  elif [[ $4 = "cbor" ]]; then
+    metadata="--metadata-cbor-file ${metafile}"
+  else
+    say "${FG_RED}ERROR${NC}: unknown metadata type '$4'"
+    return 1
+  fi
 
   say "" 1
-  say "# Build, Sign & Send transaction" 1 "log"
+  say "# Protocol Parameters" 1 "log"
+  currSlot=$(getSlotTip)
+  if [[ ${op_mode} = "hybrid" ]]; then
+    say "\nHow long do you want the transaction to be valid?"
+    read -r -p "TTL (in seconds, default: 1800/30min): " ttl_enter
+    if [[ -n ${ttl_enter} && ! ${ttl_enter} =~ ^[0-9]+$ ]]; then
+      say "\n${FG_RED}ERROR${NC}: invalid TTL number, non digit characters found: ${ttl_enter}" 1>&2
+      return 1
+    fi
+    ttlValue=$(( currSlot + (${ttl_enter:-1800}/SLOT_LENGTH) ))
+    echo
+  else
+    ttlValue=$(( currSlot + (600/SLOT_LENGTH) )) # TTL default: 10min
+  fi
+  say "Current slot is ${currSlot}, setting ttl to ${ttlValue}" 1 "log"
+  getBalance ${addr}
 
-  say "Building transaction" 1
-  say "$ ${CCLI} ${buildArgs[*]}" 2
-  output=$(${CCLI} ${buildArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 1. Problem during tx creation with args ${buildArgs[*]}" 1>&2
-    say "$output"
+  # Use all available utxo in source address
+  say "" 2
+  say "Using UTxO's:" 2
+  tx_in=""
+  while read -r utxo; do
+    in_addr=$(awk '{ print $1 }' <<< "${utxo}" | sed -e "s@\"@@g")
+    idx=$(awk '{ print $2 }' <<< "${utxo}")
+    utxo_balance=$(awk '{ print $3 }' <<< "${utxo}")
+    say "TxHash: ${in_addr}#${idx}" 2
+    say "ADA: $(formatLovelace ${utxo_balance})" 2
+    tx_in="${tx_in} --tx-in ${in_addr}#${idx}"
+  done <"${TMP_FOLDER}"/balance.out
+
+  say "" 1
+  say "# Calculate fee, new amount and remaining balance" 1 "log"
+  say "$ ${CCLI} transaction build-raw ${tx_in} --tx-out ${addr}+0 --invalid-hereafter ${ttlValue} --fee 0 ${metadata} ${ERA_IDENTIFIER} --out-file ${TMP_FOLDER}/tx0.tmp" 2
+  if ! ${CCLI} transaction build-raw ${tx_in} --tx-out ${addr}+0 --invalid-hereafter ${ttlValue} --fee 0 ${metadata} ${ERA_IDENTIFIER} --out-file "${TMP_FOLDER}"/tx0.tmp; then return 1; fi
+  minFeeArgs=(
+    transaction calculate-min-fee
+    --tx-body-file "${TMP_FOLDER}"/tx0.tmp
+    --tx-in-count ${utx0_count}
+    --tx-out-count 1
+    ${NETWORK_IDENTIFIER}
+    --witness-count 1
+    --byron-witness-count 0
+    --protocol-params-file "${TMP_FOLDER}"/protparams.json
+  )
+  say "$ ${CCLI} ${minFeeArgs[*]}" 2
+  minFee=$([[ "$(${CCLI} ${minFeeArgs[*]})" =~ ([0-9]+) ]] && echo ${BASH_REMATCH[1]})
+  say "fee is $(formatLovelace ${minFee}) ADA" 1 "log"
+
+  if [[ ${lovelace} -lt ${minFee} ]]; then
+    say "${FG_RED}ERROR${NC}: Not enough ADA in address ( $(formatLovelace ${lovelace}) < $(formatLovelace ${minFee}) )"
     return 1
   fi
 
-  say "Signing transaction" 1
-  say "$ ${CCLI} ${signArgs[*]}" 2
-  output=$(${CCLI} ${signArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 2. Problem during signing with args ${signArgs[*]}" 1>&2
-    say "$output"
-    return 1
-  fi
+  newBalance=$(( lovelace - minFee ))
+  tx_out="--tx-out ${addr}+${newBalance}"
+  say "Balance left to be returned in used UTxO is $(formatLovelace ${newBalance}) ADA ( $(formatLovelace ${lovelace}) - $(formatLovelace ${minFee}) )" 1 "log"
 
-  say "Sending transaction" 1
-  say "$ ${CCLI} ${submitArgs[*]}" 2
-  output=$(${CCLI} ${submitArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 3. Problem during tx submission with args ${submitArgs[*]}" 1>&2
-    say "$output"
-    return 1
+  say "" 1
+  say "# Build transaction" 1 "log"
+  
+  buildArgs=(
+    ${tx_in}
+    ${tx_out}
+    --invalid-hereafter ${ttlValue}
+    --fee ${minFee}
+    ${metadata}
+    --out-file "${TMP_FOLDER}"/tx.raw
+  )
+  if ! buildTx; then return 1; fi
+  
+  if [[ ${op_mode} = "hybrid" ]]; then
+    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
+      say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
+      return 1
+    fi
+    say "Transaction successfully built and saved to: ${FG_CYAN}${tx_tmp}${NC}" "log"
+    say "Copy file to offline computer and sign it using CNTools in offline mode '-o' [Sign Tx] with:" "log"
+    say "Wallet: ${FG_GREEN}${WALLET_PAY_SK_FILENAME}${NC}" "log"
+    return 2 # return as failed to stop main processing and return to home menu
   fi
+  
+  say "" 1
+  say "# Sign & Send transaction" 1 "log"
+  
+  if ! signTx "${TMP_FOLDER}/tx.raw" "${payment_sk_file}"; then return 1; fi
+  if ! submitTx "${tx_signed}"; then return 1; fi
 }
 
 
@@ -834,19 +1237,21 @@ sendADA() {
 # Return     : 0 if registered, else 1
 isWalletRegistered() {
   if getRewardAddress $1; then
-    stakeAddressInfo=$(${CCLI} shelley query stake-address-info ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --address ${reward_addr} | jq -r '.[] // empty')
+    stakeAddressInfo=$(${CCLI} query stake-address-info ${ERA_IDENTIFIER} ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --address ${reward_addr} | jq -r '.[0] // empty')
     [[ -n "${stakeAddressInfo}" ]] && return 0
   fi
   return 1
 }
 
-# Command    : registerStakeWallet [wallet name]
+# Command    : registerStakeWallet [wallet name] [optional: skip validation true|false]
 # Description: Register stake keys on chain and move funds from payment address to payment base address
 # Return     : prints progress on STDOUT
 registerStakeWallet() {
 
-  say "\nWallet ${GREEN}${1}${NC} not registered on chain"
-  waitForInput "press any key to continue with registration"
+  if [[ -z $2 || $2 = "false" ]]; then
+    say "Wallet ${FG_GREEN}${1}${NC} not registered on chain"
+    waitForInput "press any key to continue with registration" && echo
+  fi
 
   # Wallet key filenames
   payment_sk_file="${WALLET_FOLDER}/${1}/${WALLET_PAY_SK_FILENAME}"
@@ -854,16 +1259,26 @@ registerStakeWallet() {
   stake_vk_file="${WALLET_FOLDER}/${1}/${WALLET_STAKE_VK_FILENAME}"
   stake_cert_file="${WALLET_FOLDER}/${1}/${WALLET_STAKE_CERT_FILENAME}"
 
-  say "\n" 1
   say "Creating registration certificate" 1 "log"
   say "" 1
-  say "${CCLI} shelley stake-address registration-certificate --stake-verification-key-file ${stake_vk_file} --out-file ${stake_cert_file}" 2
-  ${CCLI} shelley stake-address registration-certificate --stake-verification-key-file "${stake_vk_file}" --out-file "${stake_cert_file}"
+  say "${CCLI} stake-address registration-certificate --stake-verification-key-file ${stake_vk_file} --out-file ${stake_cert_file}" 2
+  if ! ${CCLI} stake-address registration-certificate --stake-verification-key-file "${stake_vk_file}" --out-file "${stake_cert_file}"; then return 1; fi
 
   say "# Protocol Parameters" 1 "log"
   currSlot=$(getSlotTip)
-  ttlValue=$(( currSlot + 1000 ))
-  keyDeposit=$(cat "${TMP_FOLDER}"/protparams.json | jq -r '.keyDeposit')
+  if [[ ${op_mode} = "hybrid" ]]; then
+    say "\nHow long do you want the transaction to be valid?"
+    read -r -p "TTL (in seconds, default: 1800/30min): " ttl_enter
+    if [[ -n ${ttl_enter} && ! ${ttl_enter} =~ ^[0-9]+$ ]]; then
+      say "\n${FG_RED}ERROR${NC}: invalid TTL number, non digit characters found: ${ttl_enter}" 1>&2
+      return 1
+    fi
+    ttlValue=$(( currSlot + (${ttl_enter:-1800}/SLOT_LENGTH) ))
+    echo
+  else
+    ttlValue=$(( currSlot + (600/SLOT_LENGTH) )) # TTL default: 10min
+  fi
+  keyDeposit=$(jq -r '.keyDeposit' "${TMP_FOLDER}"/protparams.json)
   say "Key Deposit is ${keyDeposit}" 1 "log"
   say "Current slot is ${currSlot}, setting ttl to ${ttlValue}" 1 "log"
 
@@ -882,10 +1297,10 @@ registerStakeWallet() {
 
   say "" 1
   say "# Calculate fee" 1 "log"
-  say "$ ${CCLI} shelley transaction build-raw ${tx_in} --tx-out ${base_addr}+$(( lovelace - keyDeposit )) --ttl ${ttlValue} --fee 0 --certificate-file ${stake_cert_file} --out-file ${TMP_FOLDER}/tx0.tmp" 2
-  ${CCLI} shelley transaction build-raw ${tx_in} --tx-out ${base_addr}+$(( lovelace - keyDeposit )) --ttl ${ttlValue} --fee 0 --certificate-file ${stake_cert_file} --out-file "${TMP_FOLDER}"/tx0.tmp
+  say "$ ${CCLI} transaction build-raw ${tx_in} --tx-out ${base_addr}+0 --invalid-hereafter ${ttlValue} --fee 0 --certificate-file ${stake_cert_file} ${ERA_IDENTIFIER} --out-file ${TMP_FOLDER}/tx0.tmp" 2
+  if ! ${CCLI} transaction build-raw ${tx_in} --tx-out ${base_addr}+0 --invalid-hereafter ${ttlValue} --fee 0 --certificate-file ${stake_cert_file} ${ERA_IDENTIFIER} --out-file "${TMP_FOLDER}"/tx0.tmp; then return 1; fi
   minFeeArgs=(
-    shelley transaction calculate-min-fee
+    transaction calculate-min-fee
     --tx-body-file "${TMP_FOLDER}"/tx0.tmp
     --tx-in-count ${utx0_count}
     --tx-out-count 1
@@ -899,7 +1314,7 @@ registerStakeWallet() {
   say "fee is $(formatLovelace ${minFee}) ADA" 1 "log"
 
   if [[ ${lovelace} -lt $(( minFee + keyDeposit )) ]]; then
-    say "${RED}ERROR${NC}: Not enough ADA in wallet ($(formatLovelace ${lovelace}) < $(formatLovelace ${minFee}) + $(formatLovelace ${keyDeposit}))"
+    say "\n${FG_RED}ERROR${NC}: Not enough ADA in wallet ($(formatLovelace ${lovelace}) < $(formatLovelace ${minFee}) + $(formatLovelace ${keyDeposit}))"
     return 1
   fi
 
@@ -908,79 +1323,56 @@ registerStakeWallet() {
 
   say "New balance after tx fee and key deposit is $(formatLovelace ${newBalance}) ADA ($(formatLovelace ${lovelace}) - $(formatLovelace ${minFee}) - $(formatLovelace ${keyDeposit}))" 1 "log"
 
+  say "" 1
+  say "# Build transaction" 1 "log"
+  
   buildArgs=(
-    shelley transaction build-raw
     ${tx_in}
     ${tx_out}
-    --ttl ${ttlValue}
+    --invalid-hereafter ${ttlValue}
     --fee ${minFee}
     --certificate-file ${stake_cert_file}
     --out-file "${TMP_FOLDER}"/tx.raw
   )
-
-  signArgs=(
-    shelley transaction sign
-    --tx-body-file "${TMP_FOLDER}"/tx.raw
-    --signing-key-file ${payment_sk_file}
-    --signing-key-file ${stake_sk_file}
-    ${NETWORK_IDENTIFIER}
-    --out-file "${TMP_FOLDER}"/tx.signed
-  )
-
-  submitArgs=(
-    shelley transaction submit
-    --tx-file "${TMP_FOLDER}"/tx.signed
-    ${PROTOCOL_IDENTIFIER}
-    ${NETWORK_IDENTIFIER}
-  )
-
+  if ! buildTx; then return 1; fi
+  
+  if [[ ${op_mode} = "hybrid" ]]; then
+    echo
+    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
+      say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
+      return 1
+    fi
+    say "Transaction successfully built and saved to: ${FG_CYAN}${tx_tmp}${NC}" "log"
+    say "Copy file to offline computer and sign it using CNTools in offline mode '-o' [Sign Tx] with:" "log"
+    say "Wallet ${FG_GREEN}${WALLET_PAY_SK_FILENAME}${NC}" "log"
+    say "Wallet ${FG_GREEN}${WALLET_STAKE_SK_FILENAME}${NC}" "log"
+    echo
+    return 2 # return as failed to stop main processing and return to home menu
+  fi
+  
   say "" 1
-  say "# Build, Sign & Send transaction" 1 "log"
+  say "# Sign & Send transaction" 1 "log"
+  
+  if ! signTx "${TMP_FOLDER}/tx.raw" "${stake_sk_file}" "${payment_sk_file}"; then return 1; fi
+  if ! submitTx "${tx_signed}"; then return 1; fi
 
-  say "Building transaction" 1 "log"
-  say "$ ${CCLI} ${buildArgs[*]}" 2
-  output=$(${CCLI} ${buildArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 1. Problem during tx creation with args ${buildArgs[*]}"
-    say "$output"
-    return 1
-  fi
-
-  say "Signing transaction" 1 "log"
-  say "$ ${CCLI} ${signArgs[*]}" 2
-  output=$(${CCLI} ${signArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 2. Problem during signing with args ${signArgs[*]}"
-    say "$output"
-    return 1
-  fi
-
-  say "Sending transaction" 1 "log"
-  say "$ ${CCLI} ${submitArgs[*]}" 2
-  output=$(${CCLI} ${submitArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 3. Problem during tx submission with args ${submitArgs[*]}"
-    say "$output"
-    return 1
-  fi
-
-  say "\n\n${ORANGE}Waiting for wallet registration to be recorded on chain, if aborted, choosen action will fail${NC}"
-
+  say "${FG_YELLOW}Waiting for wallet registration to be recorded on chain${NC}"
   while true; do
     if ! waitNewBlockCreated; then
       break
     fi
     getBalance ${base_addr}
     if [[ ${lovelace} -ne ${newBalance} ]]; then
-      say ""
-      say "${ORANGE}WARN${NC}: Balance mismatch, transaction not included in latest block ($(formatLovelace ${lovelace}) != $(formatLovelace ${newBalance}))"
+      say "${FG_YELLOW}WARN${NC}: Balance mismatch, wallet registration not included in latest block... waiting for next block!"
+      say "$(formatLovelace ${lovelace}) != $(formatLovelace ${newBalance})" 1
     else
       break
     fi
   done
 
   if [[ ${lovelace} -ne ${newBalance} ]]; then
-    say "${RED}ERROR${NC}: operation aborted, selected action will not complete"
+    say "${FG_YELLOW}WARN${NC}: wallet registration check aborted"
     return 1
   fi
 
@@ -988,39 +1380,166 @@ registerStakeWallet() {
 }
 
 
-# Command    : registerPool [pledge wallet base address] [pool cold sign key] [pledge wallet stake sign key] [pool registration cert file] [delegation certificate] [pledge wallet payment sign key]
+# Command    : deregisterStakeWallet [wallet]
+# Description: Deregister stake keys/wallet from chain, key deposit fee returned to wallets base address
+# Return     : prints progress on STDOUT
+deregisterStakeWallet() {
+
+  # Wallet key filenames
+  payment_sk_file="${WALLET_FOLDER}/${1}/${WALLET_PAY_SK_FILENAME}"
+  stake_sk_file="${WALLET_FOLDER}/${1}/${WALLET_STAKE_SK_FILENAME}"
+  stake_vk_file="${WALLET_FOLDER}/${1}/${WALLET_STAKE_VK_FILENAME}"
+  stake_dereg_file="${WALLET_FOLDER}/${1}/${WALLET_STAKE_DEREG_FILENAME}"
+
+  say "Creating deregistration certificate" 1 "log"
+  say "" 1
+  say "${CCLI} stake-address deregistration-certificate --stake-verification-key-file ${stake_vk_file} --out-file ${stake_dereg_file}" 2
+  if ! ${CCLI} stake-address deregistration-certificate --stake-verification-key-file "${stake_vk_file}" --out-file "${stake_dereg_file}"; then return 1; fi
+
+  say "# Protocol Parameters" 1 "log"
+  currSlot=$(getSlotTip)
+  if [[ ${op_mode} = "hybrid" ]]; then
+    say "\nHow long do you want the transaction to be valid?"
+    read -r -p "TTL (in seconds, default: 1800/30min): " ttl_enter
+    if [[ -n ${ttl_enter} && ! ${ttl_enter} =~ ^[0-9]+$ ]]; then
+      say "\n${FG_RED}ERROR${NC}: invalid TTL number, non digit characters found: ${ttl_enter}" 1>&2
+      return 1
+    fi
+    ttlValue=$(( currSlot + (${ttl_enter:-1800}/SLOT_LENGTH) ))
+    echo
+  else
+    ttlValue=$(( currSlot + (600/SLOT_LENGTH) )) # TTL default: 10min
+  fi
+  keyDeposit=$(jq -r '.keyDeposit' "${TMP_FOLDER}"/protparams.json)
+  say "Key Deposit is ${keyDeposit}" 1 "log"
+  say "Current slot is ${currSlot}, setting ttl to ${ttlValue}" 1 "log"
+
+  # Use all available utxo in tx fee wallet base address
+  say "" 2
+  say "Using UTxO's:" 2
+  tx_in=""
+  while read -r utxo; do
+    in_addr=$(awk '{ print $1 }' <<< "${utxo}" | sed -e "s@\"@@g")
+    idx=$(awk '{ print $2 }' <<< "${utxo}")
+    utxo_balance=$(awk '{ print $3 }' <<< "${utxo}")
+    say "TxHash: ${in_addr}#${idx}" 2
+    say "ADA: $(formatLovelace ${utxo_balance})" 2
+    tx_in="${tx_in} --tx-in ${in_addr}#${idx}"
+  done <"${TMP_FOLDER}"/balance.out
+
+  say "" 1
+  say "# Calculate fee" 1 "log"
+  say "$ ${CCLI} transaction build-raw ${tx_in} --tx-out ${base_addr}+0 --invalid-hereafter ${ttlValue} --fee 0 --certificate-file ${stake_dereg_file} ${ERA_IDENTIFIER} --out-file ${TMP_FOLDER}/tx0.tmp" 2
+  if ! ${CCLI} transaction build-raw ${tx_in} --tx-out ${base_addr}+0 --invalid-hereafter ${ttlValue} --fee 0 --certificate-file ${stake_dereg_file} ${ERA_IDENTIFIER} --out-file "${TMP_FOLDER}"/tx0.tmp; then return 1; fi
+  minFeeArgs=(
+    transaction calculate-min-fee
+    --tx-body-file "${TMP_FOLDER}"/tx0.tmp
+    --tx-in-count ${utx0_count}
+    --tx-out-count 1
+    ${NETWORK_IDENTIFIER}
+    --witness-count 2
+    --byron-witness-count 0
+    --protocol-params-file "${TMP_FOLDER}"/protparams.json
+  )
+  say "$ ${CCLI} ${minFeeArgs[*]}" 2
+  minFee=$([[ "$(${CCLI} ${minFeeArgs[*]})" =~ ([0-9]+) ]] && echo ${BASH_REMATCH[1]})
+  say "fee is $(formatLovelace ${minFee}) ADA" 1 "log"
+
+  if [[ $(( lovelace + keyDeposit - minFee )) -lt 0 ]]; then
+    say "\n${FG_RED}ERROR${NC}: Not enough ADA in wallet ($(formatLovelace ${lovelace}) + $(formatLovelace ${keyDeposit}) < $(formatLovelace ${minFee}))"
+    return 1
+  fi
+
+  newBalance=$(( lovelace + keyDeposit - minFee ))
+  tx_out="--tx-out ${base_addr}+${newBalance}"
+
+  say "New balance after returned key deposit and subtracted tx fee is $(formatLovelace ${newBalance}) ADA ($(formatLovelace ${lovelace}) + $(formatLovelace ${keyDeposit}) - $(formatLovelace ${minFee}))" 1 "log"
+
+  say "" 1
+  say "# Build transaction" 1 "log"
+  
+  buildArgs=(
+    ${tx_in}
+    ${tx_out}
+    --invalid-hereafter ${ttlValue}
+    --fee ${minFee}
+    --certificate-file ${stake_dereg_file}
+    --out-file "${TMP_FOLDER}"/tx.raw
+  )
+  if ! buildTx; then return 1; fi
+  
+  if [[ ${op_mode} = "hybrid" ]]; then
+    echo
+    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
+      say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
+      return 1
+    fi
+    say "Transaction successfully built and saved to: ${FG_CYAN}${tx_tmp}${NC}" "log"
+    say "Copy file to offline computer and sign it using CNTools in offline mode '-o' [Sign Tx] with:" "log"
+    say "Wallet ${FG_GREEN}${WALLET_PAY_SK_FILENAME}${NC}" "log"
+    say "Wallet ${FG_GREEN}${WALLET_STAKE_SK_FILENAME}${NC}" "log"
+    echo
+    return 2 # return as failed to stop main processing and return to home menu
+  fi
+  
+  say "" 1
+  say "# Sign & Send transaction" 1 "log"
+  
+  if ! signTx "${TMP_FOLDER}/tx.raw" "${stake_sk_file}" "${payment_sk_file}"; then return 1; fi
+  if ! submitTx "${tx_signed}"; then return 1; fi
+}
+
+
+# Command    : registerPool [pool name] [reward wallet] [delegate reward wallet] [owner wallet] [multi-owner skeys ...]
 #
 # Description: Register pool with pledge on chain
-# Parameters : pledge wallet base address      >   payment address, funds needed to pay tx fee for pool registration
-#              pool cold sign key              >   pool cold sign key
-#              pledge wallet stake sign key    >   stake signature key
-#              pool registration cert file     >   pool registration cert file
-#              delegation certificate          >   stake certificate
-#              pledge wallet payment sign key  >   payment signature key
+# Parameters : pool name                 >   pool to register on chain
+#              reward wallet             >   name of wallet that collects the pool rewards
+#              delegate reward wallet    >   true or false, should reward wallet be delegated to pool
+#              owner wallet              >   the pool owner, also pays for the pool registration fee
+#              multi-owner skeys         >   a list of extra extra owner skeys to sign pool registration with
 # Return     : prints progress on STDOUT
 # Examples of Usage:
-#   >> registerPool 00d9d57cb....ssL7fzhq "../pools/MyPool/cold.skey" "../wallet/MyWallet/stake.skey" "pool.cert" "delegation.cert" "../wallet/MyWallet/payment.skey"
+#   >> registerPool "MyPool" "MyRewardWallet" "true" "MyOwnerWallet" "/path/to/secondOwner.skey"
 #
 registerPool() {
 
-  # script arguments
-  base_addr="$1"
-  pool_coldkey_sk_file="$2"
-  stake_sk_file="$3"
-  pool_regcert_file="$4"
-  pool_pledgecert_file="$5"
-  pay_payment_sk_file="$6"
+  pool_coldkey_sk_file="${POOL_FOLDER}/${1}/${POOL_COLDKEY_SK_FILENAME}"
+  pool_regcert_file="${POOL_FOLDER}/${1}/${POOL_REGCERT_FILENAME}"
+  reward_stake_sk_file="${WALLET_FOLDER}/${2}/${WALLET_STAKE_SK_FILENAME}"
+  reward_delegation_cert_file="${WALLET_FOLDER}/${2}/${WALLET_DELEGCERT_FILENAME}"
+  delegate_reward_wallet="${3}"
+  owner_payment_sk_file="${WALLET_FOLDER}/${4}/${WALLET_PAY_SK_FILENAME}"
+  owner_stake_sk_file="${WALLET_FOLDER}/${4}/${WALLET_STAKE_SK_FILENAME}"
+  owner_delegation_cert_file="${WALLET_FOLDER}/${4}/${WALLET_DELEGCERT_FILENAME}"
+  getBaseAddress "${4}"
+  getBalance ${base_addr}
+  shift 4
+  multi_owner_count=$#
+  multi_owner_keys=( "$@" )
 
   if [[ ! -s "${TMP_FOLDER}"/balance.out ]]; then
-    say "${RED}ERROR${NC}: wallet empty"
+    say "${FG_RED}ERROR${NC}: wallet empty"
     return 1
   fi
 
   say "" 1
   say "# Protocol Parameters" 1 "log"
   currSlot=$(getSlotTip)
-  ttlValue=$(( currSlot + 1000 ))
-  poolDeposit=$(cat "${TMP_FOLDER}"/protparams.json | jq -r '.poolDeposit')
+  if [[ ${op_mode} = "hybrid" ]]; then
+    say "\nHow long do you want the transaction to be valid?"
+    read -r -p "TTL (in seconds, default: 1800/30min): " ttl_enter
+    if [[ -n ${ttl_enter} && ! ${ttl_enter} =~ ^[0-9]+$ ]]; then
+      say "\n${FG_RED}ERROR${NC}: invalid TTL number, non digit characters found: ${ttl_enter}" 1>&2
+      return 1
+    fi
+    ttlValue=$(( currSlot + (${ttl_enter:-1800}/SLOT_LENGTH) ))
+    echo
+  else
+    ttlValue=$(( currSlot + (600/SLOT_LENGTH) )) # TTL default: 10min
+  fi
+  poolDeposit=$(jq -r '.poolDeposit' "${TMP_FOLDER}"/protparams.json)
   say "Pool Deposit is ${poolDeposit}" 1 "log"
   say "Current slot is ${currSlot}, setting ttl to ${ttlValue}" 1 "log"
 
@@ -1036,18 +1555,29 @@ registerPool() {
     say "ADA: $(formatLovelace ${utxo_balance})" 2
     tx_in="${tx_in} --tx-in ${in_addr}#${idx}"
   done <"${TMP_FOLDER}"/balance.out
+  
+  reward_delegation_cert=""
+  reward_wallet_key=""
+  witness_count=$(( 3 + multi_owner_count ))
+  if [[ "${delegate_reward_wallet}" = "true" ]]; then
+    reward_delegation_cert="--certificate-file ${reward_delegation_cert_file}"
+  fi
+  if [[ ! "${owner_stake_sk_file}" = "${reward_stake_sk_file}" ]]; then
+    reward_wallet_key="${reward_stake_sk_file}"
+    ((witness_count++))
+  fi
 
   say "" 1
   say "# Calculate fee, new amount and remaining balance" 1 "log"
-  say "$ ${CCLI} shelley transaction build-raw ${tx_in} --tx-out ${base_addr}+$(( lovelace - poolDeposit )) --ttl ${ttlValue} --certificate-file ${pool_regcert_file} --certificate-file ${pool_pledgecert_file} --fee 0 --out-file ${TMP_FOLDER}/tx0.tmp" 2
-  ${CCLI} shelley transaction build-raw ${tx_in} --tx-out ${base_addr}+$(( lovelace - poolDeposit )) --ttl ${ttlValue} --certificate-file ${pool_regcert_file} --certificate-file ${pool_pledgecert_file} --fee 0 --out-file "${TMP_FOLDER}"/tx0.tmp
+  say "$ ${CCLI} transaction build-raw ${tx_in} --tx-out ${base_addr}+0 --invalid-hereafter ${ttlValue} --certificate-file ${pool_regcert_file} --certificate-file ${owner_delegation_cert_file} ${reward_delegation_cert} --fee 0 ${ERA_IDENTIFIER} --out-file ${TMP_FOLDER}/tx0.tmp" 2
+  if ! ${CCLI} transaction build-raw ${tx_in} --tx-out ${base_addr}+0 --invalid-hereafter ${ttlValue} --certificate-file ${pool_regcert_file} --certificate-file ${owner_delegation_cert_file} ${reward_delegation_cert} --fee 0 ${ERA_IDENTIFIER} --out-file "${TMP_FOLDER}"/tx0.tmp; then return 1; fi
   minFeeArgs=(
-    shelley transaction calculate-min-fee
+    transaction calculate-min-fee
     --tx-body-file "${TMP_FOLDER}"/tx0.tmp
     --tx-in-count ${utx0_count}
     --tx-out-count 1
     ${NETWORK_IDENTIFIER}
-    --witness-count 3
+    --witness-count ${witness_count}
     --byron-witness-count 0
     --protocol-params-file "${TMP_FOLDER}"/protparams.json
   )
@@ -1056,7 +1586,7 @@ registerPool() {
   say "fee is $(formatLovelace ${minFee}) ADA" 1 "log"
 
   if [[ ${lovelace} -lt $(( minFee + poolDeposit )) ]]; then
-    say "${RED}ERROR${NC}: Not enough ADA in base address ( $(formatLovelace ${lovelace}) < $(formatLovelace ${minFee}) + $(formatLovelace ${poolDeposit}) )"
+    say "${FG_RED}ERROR${NC}: Not enough ADA in base address ( $(formatLovelace ${lovelace}) < $(formatLovelace ${minFee}) + $(formatLovelace ${poolDeposit}) )"
     return 1
   fi
 
@@ -1064,91 +1594,89 @@ registerPool() {
   tx_out="--tx-out ${base_addr}+${newBalance}"
   say "Balance left to be returned in used UTxO is $(formatLovelace ${newBalance}) ADA ( $(formatLovelace ${lovelace}) - $(formatLovelace ${minFee}) - $(formatLovelace ${poolDeposit}) )" 1 "log"
 
+  say "" 1
+  say "# Build transaction" 1 "log"
+  
   buildArgs=(
-    shelley transaction build-raw
     ${tx_in}
     ${tx_out}
-    --ttl ${ttlValue}
+    --invalid-hereafter ${ttlValue}
     --fee ${minFee}
     --certificate-file ${pool_regcert_file}
-    --certificate-file ${pool_pledgecert_file}
+    --certificate-file ${owner_delegation_cert_file}
+    ${reward_delegation_cert}
     --out-file "${TMP_FOLDER}"/tx.raw
   )
-
-  signArgs=(
-    shelley transaction sign
-    --tx-body-file "${TMP_FOLDER}"/tx.raw
-    --signing-key-file ${pay_payment_sk_file}
-    --signing-key-file ${pool_coldkey_sk_file}
-    --signing-key-file ${stake_sk_file}
-    ${NETWORK_IDENTIFIER}
-    --out-file "${TMP_FOLDER}"/tx.signed
-  )
-
-  submitArgs=(
-    shelley transaction submit
-    --tx-file "${TMP_FOLDER}"/tx.signed
-    ${PROTOCOL_IDENTIFIER}
-    ${NETWORK_IDENTIFIER}
-  )
-
+  if ! buildTx; then return 1; fi
+  
+  if [[ ${op_mode} = "hybrid" ]]; then
+    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
+      say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
+      return 1
+    fi
+    say "Transaction successfully built and saved to: ${FG_CYAN}${tx_tmp}${NC}" "log"
+    say "Copy file to offline computer and sign it using CNTools in offline mode '-o' [Sign Tx] with:" "log"
+    say "Owner wallet ${FG_GREEN}${WALLET_PAY_SK_FILENAME}${NC}" "log"
+    say "Owner wallet ${FG_GREEN}${WALLET_STAKE_SK_FILENAME}${NC}" "log"
+    say "Pool ${FG_GREEN}${POOL_COLDKEY_SK_FILENAME}${NC}" "log"
+    [[ -n ${reward_wallet_key} ]] && say "Reward wallet ${FG_GREEN}${WALLET_PAY_SK_FILENAME}${NC}" "log"
+    [[ ${multi_owner_count} -gt 0 ]] && say "Additional owners ${FG_GREEN}${WALLET_STAKE_SK_FILENAME}${NC}" "log"
+    return 2
+  fi
+  
   say "" 1
-  say "# Build, Sign & Send transaction" 1 "log"
-
-  say "Building transaction" 1
-  say "$ ${CCLI} ${buildArgs[*]}" 2
-  output=$(${CCLI} ${buildArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 1. Problem during tx creation with args ${buildArgs[*]}"
-    say "$output"
-    return 1
-  fi
-
-  say "Signing transaction" 1
-  say "$ ${CCLI} ${signArgs[*]}" 2
-  output=$(${CCLI} ${signArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 2. Problem during signing with args ${signArgs[*]}"
-    say "$output"
-    return 1
-  fi
-
-  say "Sending transaction" 1
-  say "$ ${CCLI} ${submitArgs[*]}" 2
-  output=$(${CCLI} ${submitArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 3. Problem during tx submission with args ${submitArgs[*]}"
-    say "$output"
-    return 1
-  fi
+  say "# Sign & Send transaction" 1 "log"
+  
+  if ! signTx "${TMP_FOLDER}/tx.raw" "${owner_payment_sk_file}" "${pool_coldkey_sk_file}" "${owner_stake_sk_file}" "${reward_wallet_key}" "${multi_owner_keys[@]}"; then return 1; fi
+  if ! submitTx "${tx_signed}"; then return 1; fi
 }
 
 
-# Command    : modifyPool [pledge wallet base address] [pool cold sign key] [pledge wallet stake sign key] [pool registration cert file] [pledge wallet payment sign key]
+# Command    : modifyPool [pool name] [reward wallet] [owner wallet] [multi-owner skeys ...]
 #
 # Description: Register pool with pledge on chain
-# Parameters : pledge wallet base address      >   payment address, funds needed to pay tx fee for pool registration
-#              pool cold sign key              >   pool cold sign key
-#              pledge wallet stake sign key    >   stake signature key
-#              pool registration cert file     >   pool registration cert file
-#              pledge wallet payment sign key  >   payment signature key
+# Parameters : pool name                 >   pool to register on chain
+#              reward wallet             >   name of wallet that collects the pool rewards
+#              owner wallet              >   the pool owner, also pays for the pool registration fee
+#              multi-owner skeys         >   a list of extra extra owner skeys to sign pool registration with
 # Return     : prints progress on STDOUT
 # Examples of Usage:
-#   >> modifyPool 00d9d57cb....ssL7fzhq "../pools/MyPool/cold.skey" "../wallet/MyWallet/stake.skey" "pool.cert" "../wallet/MyWallet/payment.skey"
+#   >> modifyPool "MyPool" "MyRewardWallet" "MyOwnerWallet" "/path/to/secondOwner.skey"
 #
 modifyPool() {
 
-  # script arguments
-  base_addr="$1"
-  pool_coldkey_sk_file="$2"
-  stake_sk_file="$3"
-  pool_regcert_file="$4"
-  pay_payment_sk_file="$5"
+  pool_coldkey_sk_file="${POOL_FOLDER}/${1}/${POOL_COLDKEY_SK_FILENAME}"
+  pool_regcert_file="${POOL_FOLDER}/${1}/${POOL_REGCERT_FILENAME}"
+  reward_stake_sk_file="${WALLET_FOLDER}/${2}/${WALLET_STAKE_SK_FILENAME}"
+  owner_payment_sk_file="${WALLET_FOLDER}/${3}/${WALLET_PAY_SK_FILENAME}"
+  owner_stake_sk_file="${WALLET_FOLDER}/${3}/${WALLET_STAKE_SK_FILENAME}"
+  getBaseAddress "${3}"
+  getBalance ${base_addr}
+  shift 3
+  multi_owner_count=$#
+  multi_owner_keys=( "$@" )
+  
+  if [[ ! -s "${TMP_FOLDER}"/balance.out ]]; then
+    say "${FG_RED}ERROR${NC}: wallet empty"
+    return 1
+  fi
 
   say "" 1
   say "# Protocol Parameters" 1 "log"
   currSlot=$(getSlotTip)
-  ttlValue=$(( currSlot + 1000 ))
+  if [[ ${op_mode} = "hybrid" ]]; then
+    say "\nHow long do you want the transaction to be valid?"
+    read -r -p "TTL (in seconds, default: 1800/30min): " ttl_enter
+    if [[ -n ${ttl_enter} && ! ${ttl_enter} =~ ^[0-9]+$ ]]; then
+      say "\n${FG_RED}ERROR${NC}: invalid TTL number, non digit characters found: ${ttl_enter}" 1>&2
+      return 1
+    fi
+    ttlValue=$(( currSlot + (${ttl_enter:-1800}/SLOT_LENGTH) ))
+    echo
+  else
+    ttlValue=$(( currSlot + (600/SLOT_LENGTH) )) # TTL default: 10min
+  fi
   say "Current slot is ${currSlot}, setting ttl to ${ttlValue}" 1 "log"
 
   # Use all available utxo in pledge wallet base address
@@ -1164,17 +1692,24 @@ modifyPool() {
     tx_in="${tx_in} --tx-in ${in_addr}#${idx}"
   done <"${TMP_FOLDER}"/balance.out
 
+  reward_wallet_key=""
+  witness_count=$(( 3 + multi_owner_count ))
+  if [[ ! "${owner_stake_sk_file}" = "${reward_stake_sk_file}" ]]; then
+    reward_wallet_key="${reward_stake_sk_file}"
+    ((witness_count++))
+  fi
+
   say "" 1
   say "# Calculate fee, new amount and remaining balance" 1 "log"
-  say "$ ${CCLI} shelley transaction build-raw ${tx_in} --tx-out ${base_addr}+$lovelace --ttl ${ttlValue} --certificate-file ${pool_regcert_file} --fee 0 --out-file ${TMP_FOLDER}/tx0.tmp" 2
-  ${CCLI} shelley transaction build-raw ${tx_in} --tx-out ${base_addr}+$lovelace --ttl ${ttlValue} --certificate-file ${pool_regcert_file} --fee 0 --out-file "${TMP_FOLDER}"/tx0.tmp
+  say "$ ${CCLI} transaction build-raw ${tx_in} --tx-out ${base_addr}+0 --invalid-hereafter ${ttlValue} --certificate-file ${pool_regcert_file} --fee 0 ${ERA_IDENTIFIER} --out-file ${TMP_FOLDER}/tx0.tmp" 2
+  if ! ${CCLI} transaction build-raw ${tx_in} --tx-out ${base_addr}+0 --invalid-hereafter ${ttlValue} --certificate-file ${pool_regcert_file} --fee 0 ${ERA_IDENTIFIER} --out-file "${TMP_FOLDER}"/tx0.tmp; then return 1; fi
   minFeeArgs=(
-    shelley transaction calculate-min-fee
+    transaction calculate-min-fee
     --tx-body-file "${TMP_FOLDER}"/tx0.tmp
     --tx-in-count ${utx0_count}
     --tx-out-count 1
     ${NETWORK_IDENTIFIER}
-    --witness-count 3
+    --witness-count ${witness_count}
     --byron-witness-count 0
     --protocol-params-file "${TMP_FOLDER}"/protparams.json
   )
@@ -1183,7 +1718,7 @@ modifyPool() {
   say "fee is $(formatLovelace ${minFee}) ADA" 1 "log"
 
   if [[ ${lovelace} -lt ${minFee} ]]; then
-    say "${RED}ERROR${NC}: Not enough ADA in base address ( $(formatLovelace ${lovelace}) < $(formatLovelace ${minFee}) )"
+    say "${FG_RED}ERROR${NC}: Not enough ADA in base address ( $(formatLovelace ${lovelace}) < $(formatLovelace ${minFee}) )"
     return 1
   fi
 
@@ -1191,81 +1726,69 @@ modifyPool() {
   tx_out="--tx-out ${base_addr}+${newBalance}"
   say "Balance left to be returned in used UTxO is $(formatLovelace ${newBalance}) ADA ( $(formatLovelace ${lovelace}) - $(formatLovelace ${minFee}) )" 1 "log"
 
+  say "" 1
+  say "# Build transaction" 1 "log"
+  
   buildArgs=(
-    shelley transaction build-raw
     ${tx_in}
     ${tx_out}
-    --ttl ${ttlValue}
+    --invalid-hereafter ${ttlValue}
     --fee ${minFee}
     --certificate-file ${pool_regcert_file}
     --out-file "${TMP_FOLDER}"/tx.raw
   )
-
-  signArgs=(
-    shelley transaction sign
-    --tx-body-file "${TMP_FOLDER}"/tx.raw
-    --signing-key-file ${pay_payment_sk_file}
-    --signing-key-file ${pool_coldkey_sk_file}
-    --signing-key-file ${stake_sk_file}
-    ${NETWORK_IDENTIFIER}
-    --out-file "${TMP_FOLDER}"/tx.signed
-  )
-
-  submitArgs=(
-    shelley transaction submit
-    --tx-file "${TMP_FOLDER}"/tx.signed
-    ${PROTOCOL_IDENTIFIER}
-    ${NETWORK_IDENTIFIER}
-  )
-
+  if ! buildTx; then return 1; fi
+  
+  if [[ ${op_mode} = "hybrid" ]]; then
+    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
+      say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
+      return 1
+    fi
+    say "Transaction successfully built and saved to: ${FG_CYAN}${tx_tmp}${NC}" "log"
+    say "Copy file to offline computer and sign it using CNTools in offline mode '-o' [Sign Tx] with:" "log"
+    say "Owner wallet ${FG_GREEN}${WALLET_PAY_SK_FILENAME}${NC}" "log"
+    say "Owner wallet ${FG_GREEN}${WALLET_STAKE_SK_FILENAME}${NC}" "log"
+    say "Pool ${FG_GREEN}${POOL_COLDKEY_SK_FILENAME}${NC}" "log"
+    [[ -n ${reward_wallet_key} ]] && say "Reward wallet ${FG_GREEN}${WALLET_PAY_SK_FILENAME}${NC}" "log"
+    [[ ${multi_owner_count} -gt 0 ]] && say "Additional owners ${FG_GREEN}${WALLET_STAKE_SK_FILENAME}${NC}" "log"
+    return 2
+  fi
+  
   say "" 1
-  say "# Build, Sign & Send transaction" 1 "log"
-
-  say "Building transaction" 1
-  say "$ ${CCLI} ${buildArgs[*]}" 2
-  output=$(${CCLI} ${buildArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 1. Problem during tx creation with args ${buildArgs[*]}"
-    say "$output"
-    return 1
-  fi
-
-  say "Signing transaction" 1
-  say "$ ${CCLI} ${signArgs[*]}" 2
-  output=$(${CCLI} ${signArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 2. Problem during signing with args ${signArgs[*]}"
-    say "$output"
-    return 1
-  fi
-
-  say "Sending transaction" 1
-  say "$ ${CCLI} ${submitArgs[*]}" 2
-  output=$(${CCLI} ${submitArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 3. Problem during tx submission with args ${submitArgs[*]}"
-    say "$output"
-    return 1
-  fi
+  say "# Sign & Send transaction" 1 "log"
+  
+  if ! signTx "${TMP_FOLDER}/tx.raw" "${owner_payment_sk_file}" "${pool_coldkey_sk_file}" "${owner_stake_sk_file}" "${reward_wallet_key}" "${multi_owner_keys[@]}"; then return 1; fi
+  if ! submitTx "${tx_signed}"; then return 1; fi
 }
 
-# Command    : withdrawRewards [stake vkey file] [stake skey file] [payment skey file] [base address] [reward address] [rewards in lovelace]
+# Command    : withdrawRewards [stake skey file] [payment skey file] [base address] [reward address] [rewards in lovelace]
 # Description: withdraw rewards earned and send to wallet base address
 #
 withdrawRewards() {
 
   # script arguments
-  stake_vk_file="$1"
-  stake_sk_file="$2"
-  pay_payment_sk_file="$3"
-  base_addr="$4"
-  stake_addr="$5"
-  reward_lovelace="$6"
+  stake_sk_file="$1"
+  payment_sk_file="$2"
+  base_addr="$3"
+  stake_addr="$4"
+  reward_lovelace="$5"
 
   say "" 1
   say "# Protocol Parameters" 1 "log"
   currSlot=$(getSlotTip)
-  ttlValue=$(( currSlot + 1000 ))
+  if [[ ${op_mode} = "hybrid" ]]; then
+    say "\nHow long do you want the transaction to be valid?"
+    read -r -p "TTL (in seconds, default: 1800/30min): " ttl_enter
+    if [[ -n ${ttl_enter} && ! ${ttl_enter} =~ ^[0-9]+$ ]]; then
+      say "\n${FG_RED}ERROR${NC}: invalid TTL number, non digit characters found: ${ttl_enter}" 1>&2
+      return 1
+    fi
+    ttlValue=$(( currSlot + (${ttl_enter:-1800}/SLOT_LENGTH) ))
+    echo
+  else
+    ttlValue=$(( currSlot + (600/SLOT_LENGTH) )) # TTL default: 10min
+  fi
   say "Current slot is ${currSlot}, setting ttl to ${ttlValue}" 1 "log"
 
   # Use all available utxo in pledge wallet base address
@@ -1283,10 +1806,10 @@ withdrawRewards() {
 
   say "" 1
   say "# Calculate fee, new amount and remaining balance" 1 "log"
-  say "$ ${CCLI} shelley transaction build-raw ${tx_in} --tx-out ${base_addr}+$(( lovelace + reward_lovelace )) --ttl ${ttlValue} --fee 0 --out-file ${TMP_FOLDER}/tx0.tmp" 2
-  ${CCLI} shelley transaction build-raw ${tx_in} --tx-out ${base_addr}+$(( lovelace + reward_lovelace )) --ttl ${ttlValue} --fee 0 --out-file "${TMP_FOLDER}"/tx0.tmp
+  say "$ ${CCLI} transaction build-raw ${tx_in} --tx-out ${base_addr}+0 --invalid-hereafter ${ttlValue} --fee 0 ${ERA_IDENTIFIER} --out-file ${TMP_FOLDER}/tx0.tmp" 2
+  if ! ${CCLI} transaction build-raw ${tx_in} --tx-out ${base_addr}+0 --invalid-hereafter ${ttlValue} --fee 0 ${ERA_IDENTIFIER} --out-file "${TMP_FOLDER}"/tx0.tmp; then return 1; fi
   minFeeArgs=(
-    shelley transaction calculate-min-fee
+    transaction calculate-min-fee
     --tx-body-file "${TMP_FOLDER}"/tx0.tmp
     --tx-in-count ${utx0_count}
     --tx-out-count 1
@@ -1300,7 +1823,7 @@ withdrawRewards() {
   say "fee is $(formatLovelace ${minFee}) ADA" 1 "log"
 
   if [[ ${lovelace} -lt ${minFee} ]]; then
-    say "${RED}ERROR${NC}: Not enough ADA in wallet ( $(formatLovelace ${lovelace}) < $(formatLovelace ${minFee}) )"
+    say "${FG_RED}ERROR${NC}: Not enough ADA in wallet ( $(formatLovelace ${lovelace}) < $(formatLovelace ${minFee}) )"
     return 1
   fi
 
@@ -1308,68 +1831,43 @@ withdrawRewards() {
   tx_out="--tx-out ${base_addr}+${newBalance}"
   say "Balance left to be returned in used UTxO is $(formatLovelace ${newBalance}) ADA ( $(formatLovelace ${lovelace}) - $(formatLovelace ${minFee}) )" 1 "log"
 
+  say "" 1
+  say "# Build transaction" 1 "log"
+  
   buildArgs=(
-    shelley transaction build-raw
     ${tx_in}
     ${tx_out}
     --withdrawal ${stake_addr}+${reward_lovelace}
-    --ttl ${ttlValue}
+    --invalid-hereafter ${ttlValue}
     --fee ${minFee}
     --out-file "${TMP_FOLDER}"/tx.raw
   )
-
-  signArgs=(
-    shelley transaction sign
-    --tx-body-file "${TMP_FOLDER}"/tx.raw
-    --signing-key-file ${pay_payment_sk_file}
-    --signing-key-file ${stake_sk_file}
-    ${NETWORK_IDENTIFIER}
-    --out-file "${TMP_FOLDER}"/tx.signed
-  )
-
-  submitArgs=(
-    shelley transaction submit
-    --tx-file "${TMP_FOLDER}"/tx.signed
-    ${PROTOCOL_IDENTIFIER}
-    ${NETWORK_IDENTIFIER}
-  )
-
+  if ! buildTx; then return 1; fi
+  
+  if [[ ${op_mode} = "hybrid" ]]; then
+    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
+      say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
+      return 1
+    fi
+    say "Transaction successfully built and saved to: ${FG_CYAN}${tx_tmp}${NC}" "log"
+    say "Copy file to offline computer and sign it using CNTools in offline mode '-o' [Sign Tx] with:" "log"
+    say "Wallet ${FG_GREEN}${WALLET_PAY_SK_FILENAME}${NC}" "log"
+    say "Wallet ${FG_GREEN}${WALLET_STAKE_SK_FILENAME}${NC}" "log"
+    return 2 # return as failed to stop main processing and return to home menu
+  fi
+  
   say "" 1
-  say "# Build, Sign & Send transaction" 1 "log"
+  say "# Sign & Send transaction" 1 "log"
 
-  say "Building transaction" 1
-  say "$ ${CCLI} ${buildArgs[*]}" 2
-  output=$(${CCLI} ${buildArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 1. Problem during tx creation with args ${buildArgs[*]}"
-    say "$output"
-    return 1
-  fi
-
-  say "Signing transaction" 1
-  say "$ ${CCLI} ${signArgs[*]}" 2
-  output=$(${CCLI} ${signArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 2. Problem during signing with args ${signArgs[*]}"
-    say "$output"
-    return 1
-  fi
-
-  say "Sending transaction" 1
-  say "$ ${CCLI} ${submitArgs[*]}" 2
-  output=$(${CCLI} ${submitArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 3. Problem during tx submission with args ${submitArgs[*]}"
-    say "$output"
-    return 1
-  fi
+  if ! signTx "${TMP_FOLDER}/tx.raw" "${stake_sk_file}" "${payment_sk_file}"; then return 1; fi
+  if ! submitTx "${tx_signed}"; then return 1; fi
 }
 
-# Command    : Delegate [stake vkey] [stake skey] [pay skey] [pay addr] [pool vkey] [deleg cert]
+# Command    : Delegate [stake skey] [pay skey] [pay addr] [pool vkey] [deleg cert]
 #
 # Description: Register pool with pledge on chain
-# Parameters : stake vkey    >   wallet stake vkey
-#              stake skey    >   wallet stake skey
+# Parameters : stake skey    >   wallet stake skey
 #              pay skey      >   wallet payment skey
 #              base addr     >   wallet base address
 #              pool vkey     >   pool you are delegating to vkey
@@ -1377,22 +1875,32 @@ withdrawRewards() {
 #
 # Return     : prints progress on STDOUT
 # Examples of Usage:
-#   >> registerPool   "../wallet/MyWallet/stake.vkey" "../wallet/MyWallet/stake.skey" "../wallet/MyWallet/payment.skey" 00d9d57c....ssL7fzhq "../pools/MyPool/cold.vkey" "delegation.cert"
+#   >> registerPool "../wallet/MyWallet/stake.skey" "../wallet/MyWallet/payment.skey" 00d9d57c....ssL7fzhq "../pools/MyPool/cold.vkey" "delegation.cert"
 #
 delegate() {
 
   # script arguments
-  stake_vk_file="$1"
-  stake_sk_file="$2"
-  pay_payment_sk_file="$3"
-  base_addr="$4"
-  pool_coldkey_vk_file="$5"
-  pool_delegcert_file="$6"
+  stake_sk_file="$1"
+  payment_sk_file="$2"
+  base_addr="$3"
+  pool_coldkey_vk_file="$4"
+  pool_delegcert_file="$5"
 
   say "" 1
   say "# Protocol Parameters" 1 "log"
   currSlot=$(getSlotTip)
-  ttlValue=$(( currSlot + 1000 ))
+  if [[ ${op_mode} = "hybrid" ]]; then
+    say "\nHow long do you want the transaction to be valid?"
+    read -r -p "TTL (in seconds, default: 1800/30min): " ttl_enter
+    if [[ -n ${ttl_enter} && ! ${ttl_enter} =~ ^[0-9]+$ ]]; then
+      say "\n${FG_RED}ERROR${NC}: invalid TTL number, non digit characters found: ${ttl_enter}" 1>&2
+      return 1
+    fi
+    ttlValue=$(( currSlot + (${ttl_enter:-1800}/SLOT_LENGTH) ))
+    echo
+  else
+    ttlValue=$(( currSlot + (600/SLOT_LENGTH) )) # TTL default: 10min
+  fi
   say "Current slot is ${currSlot}, setting ttl to ${ttlValue}" 1 "log"
 
   # Use all available utxo in pledge wallet
@@ -1410,10 +1918,10 @@ delegate() {
 
   say "" 1
   say "# Calculate fee, new amount and remaining balance" 1 "log"
-  say "$ ${CCLI} shelley transaction build-raw ${tx_in} --tx-out ${base_addr}+$lovelace --ttl ${ttlValue} --fee 0 --certificate-file ${pool_delegcert_file} --out-file ${TMP_FOLDER}/tx0.tmp" 2
-  ${CCLI} shelley transaction build-raw ${tx_in} --tx-out ${base_addr}+$lovelace --ttl ${ttlValue} --fee 0 --certificate-file ${pool_delegcert_file} --out-file "${TMP_FOLDER}"/tx0.tmp
+  say "$ ${CCLI} transaction build-raw ${tx_in} --tx-out ${base_addr}+0 --invalid-hereafter ${ttlValue} --fee 0 --certificate-file ${pool_delegcert_file} ${ERA_IDENTIFIER} --out-file ${TMP_FOLDER}/tx0.tmp" 2
+  if ! ${CCLI} transaction build-raw ${tx_in} --tx-out ${base_addr}+0 --invalid-hereafter ${ttlValue} --fee 0 --certificate-file ${pool_delegcert_file} ${ERA_IDENTIFIER} --out-file "${TMP_FOLDER}"/tx0.tmp; then return 1; fi
   minFeeArgs=(
-    shelley transaction calculate-min-fee
+    transaction calculate-min-fee
     --tx-body-file "${TMP_FOLDER}"/tx0.tmp
     --tx-in-count ${utx0_count}
     --tx-out-count 1
@@ -1427,7 +1935,7 @@ delegate() {
   say "fee is $(formatLovelace ${minFee}) ADA" 1 "log"
 
   if [[ ${lovelace} -lt ${minFee} ]]; then
-    say "${RED}ERROR${NC}: Not enough ADA in wallet ( $(formatLovelace ${lovelace}) < $(formatLovelace ${minFee}) )"
+    say "${FG_RED}ERROR${NC}: Not enough ADA in wallet ( $(formatLovelace ${lovelace}) < $(formatLovelace ${minFee}) )"
     return 1
   fi
 
@@ -1435,61 +1943,37 @@ delegate() {
   tx_out="--tx-out ${base_addr}+${newBalance}"
   say "Balance left to be returned in used UTxO is $(formatLovelace ${newBalance}) ADA ( $(formatLovelace ${lovelace}) - $(formatLovelace ${minFee}) )" 1 "log"
 
+  say "" 1
+  say "# Build transaction" 1 "log"
+  
   buildArgs=(
-    shelley transaction build-raw
     ${tx_in}
     ${tx_out}
-    --ttl ${ttlValue}
+    --invalid-hereafter ${ttlValue}
     --fee ${minFee}
     --certificate-file ${pool_delegcert_file}
     --out-file "${TMP_FOLDER}"/tx.raw
   )
-
-  signArgs=(
-    shelley transaction sign
-    --tx-body-file "${TMP_FOLDER}"/tx.raw
-    --signing-key-file ${pay_payment_sk_file}
-    --signing-key-file ${stake_sk_file}
-    ${NETWORK_IDENTIFIER}
-    --out-file "${TMP_FOLDER}"/tx.signed
-  )
-
-  submitArgs=(
-    shelley transaction submit
-    --tx-file "${TMP_FOLDER}"/tx.signed
-    ${PROTOCOL_IDENTIFIER}
-    ${NETWORK_IDENTIFIER}
-  )
-
+  if ! buildTx; then return 1; fi
+  
+  if [[ ${op_mode} = "hybrid" ]]; then
+    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
+      say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
+      return 1
+    fi
+    say "Transaction successfully built and saved to: ${FG_CYAN}${tx_tmp}${NC}" "log"
+    say "Copy file to offline computer and sign it using CNTools in offline mode '-o' [Sign Tx] with:" "log"
+    say "Wallet ${FG_GREEN}${WALLET_PAY_SK_FILENAME}${NC}" "log"
+    say "Wallet ${FG_GREEN}${WALLET_STAKE_SK_FILENAME}${NC}" "log"
+    return 2 # return as failed to stop main processing and return to home menu
+  fi
+  
   say "" 1
-  say "# Build, Sign & Send transaction" 1 "log"
+  say "# Sign & Send transaction" 1 "log"
 
-  say "Building transaction" 1
-  say "$ ${CCLI} ${buildArgs[*]}" 2
-  output=$(${CCLI} ${buildArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 1. Problem during tx creation with args ${buildArgs[*]}"
-    say "$output"
-    return 1
-  fi
-
-  say "Signing transaction" 1
-  say "$ ${CCLI} ${signArgs[*]}" 2
-  output=$(${CCLI} ${signArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 2. Problem during signing with args ${signArgs[*]}"
-    say "$output"
-    return 1
-  fi
-
-  say "Sending transaction" 1
-  say "$ ${CCLI} ${submitArgs[*]}" 2
-  output=$(${CCLI} ${submitArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 3. Problem during tx submission with args ${submitArgs[*]}"
-    say "$output"
-    return 1
-  fi
+  if ! signTx "${TMP_FOLDER}/tx.raw" "${stake_sk_file}" "${payment_sk_file}"; then return 1; fi
+  if ! submitTx "${tx_signed}"; then return 1; fi
 }
 
 
@@ -1507,11 +1991,25 @@ deRegisterPool() {
   pool_deregcert_file="$2"
   wallet_addr="$3"
   wallet_payment_sk_file="$4"
+  
+  # get balance
+  getBalance ${wallet_addr}
 
   say "" 1
   say "# Protocol Parameters" 1 "log"
   currSlot=$(getSlotTip)
-  ttlValue=$(( currSlot + 1000 ))
+  if [[ ${op_mode} = "hybrid" ]]; then
+    say "\nHow long do you want the transaction to be valid?"
+    read -r -p "TTL (in seconds, default: 1800/30min): " ttl_enter
+    if [[ -n ${ttl_enter} && ! ${ttl_enter} =~ ^[0-9]+$ ]]; then
+      say "\n${FG_RED}ERROR${NC}: invalid TTL number, non digit characters found: ${ttl_enter}" 1>&2
+      return 1
+    fi
+    ttlValue=$(( currSlot + (${ttl_enter:-1800}/SLOT_LENGTH) ))
+    echo
+  else
+    ttlValue=$(( currSlot + (600/SLOT_LENGTH) )) # TTL default: 10min
+  fi
   say "Current slot is ${currSlot}, setting ttl to ${ttlValue}" 1 "log"
 
   # Use all available utxo in wallet address
@@ -1529,10 +2027,10 @@ deRegisterPool() {
 
   say "" 1
   say "# Calculate fee, new amount and remaining balance" 1 "log"
-  say "$ ${CCLI} shelley transaction build-raw ${tx_in} --tx-out ${base_addr}+$lovelace --ttl ${ttlValue} --fee 0 --certificate-file ${pool_deregcert_file} --out-file ${TMP_FOLDER}/tx0.tmp" 2
-  ${CCLI} shelley transaction build-raw ${tx_in} --tx-out ${base_addr}+$lovelace --ttl ${ttlValue} --fee 0 --certificate-file ${pool_deregcert_file} --out-file "${TMP_FOLDER}"/tx0.tmp
+  say "$ ${CCLI} transaction build-raw ${tx_in} --tx-out ${wallet_addr}+0 --invalid-hereafter ${ttlValue} --fee 0 --certificate-file ${pool_deregcert_file} ${ERA_IDENTIFIER} --out-file ${TMP_FOLDER}/tx0.tmp" 2
+  if ! ${CCLI} transaction build-raw ${tx_in} --tx-out ${wallet_addr}+0 --invalid-hereafter ${ttlValue} --fee 0 --certificate-file ${pool_deregcert_file} ${ERA_IDENTIFIER} --out-file "${TMP_FOLDER}"/tx0.tmp; then return 1; fi
   minFeeArgs=(
-    shelley transaction calculate-min-fee
+    transaction calculate-min-fee
     --tx-body-file "${TMP_FOLDER}"/tx0.tmp
     --tx-in-count ${utx0_count}
     --tx-out-count 1
@@ -1546,7 +2044,7 @@ deRegisterPool() {
   say "fee is $(formatLovelace ${minFee}) ADA" 1 "log"
 
   if [[ ${lovelace} -lt ${minFee} ]]; then
-    say "${RED}ERROR${NC}: Not enough ADA in wallet ( $(formatLovelace ${lovelace}) < $(formatLovelace ${minFee}) )"
+    say "${FG_RED}ERROR${NC}: Not enough ADA in wallet ( $(formatLovelace ${lovelace}) < $(formatLovelace ${minFee}) )"
     return 1
   fi
 
@@ -1554,123 +2052,175 @@ deRegisterPool() {
   tx_out="--tx-out ${wallet_addr}+${newBalance}"
   say "Balance left to be returned in used UTxO is $(formatLovelace ${newBalance}) ADA ( $(formatLovelace ${lovelace}) - $(formatLovelace ${minFee}) )" 1 "log"
 
+  say "" 1
+  say "# Build transaction" 1 "log"
+  
   buildArgs=(
-    shelley transaction build-raw
     ${tx_in}
     ${tx_out}
-    --ttl ${ttlValue}
+    --invalid-hereafter ${ttlValue}
     --fee ${minFee}
     --certificate-file ${pool_deregcert_file}
     --out-file "${TMP_FOLDER}"/tx.raw
   )
+  if ! buildTx; then return 1; fi
+  
+  if [[ ${op_mode} = "hybrid" ]]; then
+    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
+      say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
+      return 1
+    fi
+    say "Transaction successfully built and saved to: ${FG_CYAN}${tx_tmp}${NC}" "log"
+    say "Copy file to offline computer and sign it using CNTools in offline mode '-o' [Sign Tx] with:" "log"
+    say "Wallet ${FG_GREEN}${WALLET_PAY_SK_FILENAME}${NC}" "log"
+    say "Pool ${FG_GREEN}${POOL_COLDKEY_SK_FILENAME}${NC}" "log"
+    return 2 # return as failed to stop main processing and return to home menu
+  fi
+  
+  say "" 1
+  say "# Sign & Send transaction" 1 "log"
 
+  if ! signTx "${TMP_FOLDER}/tx.raw" "${wallet_payment_sk_file}" "${pool_coldkey_sk_file}"; then return 1; fi
+  if ! submitTx "${tx_signed}"; then return 1; fi
+}
+
+
+# Command    : buildTx
+#
+# Description: Helper function to offline build a raw transaction
+#              populate an array variable called 'buildArgs' with all data
+# Return     : prints progress on STDOUT
+# Examples of Usage:
+#   >> buildTx
+#
+buildTx() {
+  say "Building transaction" 1
+  say "$ ${CCLI} transaction build-raw ${ERA_IDENTIFIER} ${buildArgs[*]}" 2
+  output=$(${CCLI} transaction build-raw ${ERA_IDENTIFIER} ${buildArgs[*]})
+  if [[ -n $output ]]; then
+    say "${FG_RED}ERROR${NC}: Problem during tx creation with args ${buildArgs[*]}"
+    say "$output"
+    return 1
+  fi
+}
+
+# Command    : signTx [raw tx file] [signing keys ...]
+#
+# Description: Helper function to offline sign a raw transaction
+# Return     : prints progress on STDOUT
+# Examples of Usage:
+#   >> signTx "/tmp/tx.raw" "../wallet/MyWallet/payment.skey" "../wallet/MyWallet/stake.skey"
+#
+signTx() {
+  tx_raw="$1"
+  parent_dir="$(dirname "${tx_raw}")"
+  tx_signed="${parent_dir}/tx.signed_$(date +%s)"
+  shift
+  tx_sign_keys=()
+  for skey in "$@"; do
+    if [[ -f "${skey}" ]]; then
+      tx_sign_keys+=( --signing-key-file ${skey} )
+    fi
+  done
+  
   signArgs=(
-    shelley transaction sign
-    --tx-body-file "${TMP_FOLDER}"/tx.raw
-    --signing-key-file ${wallet_payment_sk_file}
-    --signing-key-file ${pool_coldkey_sk_file}
+    transaction sign
+    --tx-body-file "${tx_raw}"
+    ${tx_sign_keys[*]}
     ${NETWORK_IDENTIFIER}
-    --out-file "${TMP_FOLDER}"/tx.signed
+    --out-file "${tx_signed}"
   )
+  
+  say "Signing transaction" 1
+  say "$ ${CCLI} ${signArgs[*]} " 2
+  output=$(${CCLI} ${signArgs[*]} 2>&1)
+  if [[ -n $output ]]; then
+    say "${FG_RED}ERROR${NC}: Problem during signing with args ${signArgs[*]}"
+    say "$output"
+    return 1
+  fi
+}
+
+# Command    : submitTx [signed tx file]
+#
+# Description: Helper function to submit an offline signed transaction file
+# Return     : prints progress on STDOUT
+# Examples of Usage:
+#   >> signTx "/tmp/tx.signed"
+#
+submitTx() {
+  tx_signed="$1"
 
   submitArgs=(
-    shelley transaction submit
-    --tx-file "${TMP_FOLDER}"/tx.signed
+    transaction submit
+    --tx-file "${tx_signed}"
     ${PROTOCOL_IDENTIFIER}
     ${NETWORK_IDENTIFIER}
   )
-
-  say "" 1
-  say "# Build, Sign & Send transaction" 1 "log"
-
-  say "Building transaction" 1
-  say "$ ${CCLI} ${buildArgs[*]}" 2
-  output=$(${CCLI} ${buildArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 1. Problem during tx creation with args ${buildArgs[*]}"
-    say "$output"
-    return 1
-  fi
-
-  say "Signing transaction" 1
-  say "$ ${CCLI} ${signArgs[*]}" 2
-  output=$(${CCLI} ${signArgs[*]})
-  if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 2. Problem during signing with args ${signArgs[*]}"
-    say "$output"
-    return 1
-  fi
-
+  
   say "Sending transaction" 1
   say "$ ${CCLI} ${submitArgs[*]}" 2
-  output=$(${CCLI} ${submitArgs[*]})
+  output=$(${CCLI} ${submitArgs[*]} 2>&1)
   if [[ -n $output ]]; then
-    say "${RED}ERROR${NC}: 3. Problem during tx submission with args ${submitArgs[*]}"
+    say "${FG_RED}ERROR${NC}: Problem during tx submission with args ${submitArgs[*]}"
     say "$output"
     return 1
   fi
+  say "" 1
 }
 
 
-function printTable() {
-  local -r delimiter="${1}"
-  local -r data="$(removeEmptyLines "${2}")"
-  if [[ "${delimiter}" != '' && "$(isEmptyString "${data}")" = 'false' ]]; then
-    local -r numberOfLines="$(wc -l <<< "${data}")"
-    if [[ "${numberOfLines}" -gt '0' ]]; then
-      local table=''
-      local i=1
-      for ((i = 1; i <= "${numberOfLines}"; i = i + 1)); do
-        local line=''
-        line="$(sed "${i}q;d" <<< "${data}")"
-        local numberOfColumns='0'
-        numberOfColumns="$(awk -F "${delimiter}" '{print NF}' <<< "${line}")"
-        # Add Line Delimiter
-        if [[ "${i}" -eq '1' ]]; then
-          table="${table}$(printf '%s#+' "$(repeatString '#+' "${numberOfColumns}")")"
-        fi
-        # Add Header Or Body
-        table="${table}\n"
-        local j=1
-        for ((j = 1; j <= "${numberOfColumns}"; j = j + 1)); do
-          table="${table}$(printf '#| %s' "$(cut -d "${delimiter}" -f "${j}" <<< "${line}")")"
-        done
-        table="${table}#|\n"
-        # Add Line Delimiter
-        if [[ "${i}" -eq '1' ]] || [[ "${numberOfLines}" -gt '1' && "${i}" -eq "${numberOfLines}" ]]; then
-          table="${table}$(printf '%s#+' "$(repeatString '#+' "${numberOfColumns}")")"
-        fi
-      done
-      if [[ "$(isEmptyString "${table}")" = 'false' ]]; then
-        echo -e "${table}" | column -s '#' -t | awk '/^\+/{gsub(" ", "-", $0)}1'
-      fi
-    fi
-  fi
+# Command    : selectOpMode
+# Description: Helper function to choose operational mode
+selectOpMode() {
+  echo
+  say "Online mode  -  The default mode to use if all keys are available"
+  echo
+  say "Hybrid mode  -  1) Go through steps to build a transaction file"
+  say "                2) Copy built tx file to offline computer"
+  say "                3) Sign it using 'Sign Tx' with keys on offline computer"
+  say "                   (CNTools started in offline mode '-o' without node connection)"
+  say "                4) Copy the signed tx file back to online computer and submit using 'Submit Tx'"
+  echo
+  select_opt "[o] Online" "[h] Hybrid" "[Esc] Cancel"
+  case $? in
+    0) op_mode="online" ;;
+    1) op_mode="hybrid" ;;
+    2) return 1 ;;
+  esac
 }
 
-function removeEmptyLines() {
-  local -r content="${1}"
-  echo -e "${content}" | sed '/^\s*$/d'
-}
 
-function repeatString() {
-  local -r string="${1}"
-  local -r numberToRepeat="${2}"
-  if [[ "${string}" != '' && "${numberToRepeat}" =~ ^[1-9][0-9]*$ ]]; then
-    local -r result="$(printf "%${numberToRepeat}s")"
-    echo -e "${result// /${string}}"
-  fi
-}
+# Command    : rotatePoolKeys [pool name]
+#
+# Description: Rotate pool's KES keys
+# Return     : null
+# Examples of Usage:
+#   >> rotatePoolKeys MyPool
+#
+rotatePoolKeys() {
+  pool_name="${1}"
 
-function isEmptyString() {
-  local -r string="${1}"
-  if [[ "$(trimString "${string}")" = '' ]]; then
-    echo 'true' && return 0
-  fi
-  echo 'false' && return 1
-}
+  # cold keys
+  pool_coldkey_sk_file="${POOL_FOLDER}/${pool_name}/${POOL_COLDKEY_SK_FILENAME}"
 
-function trimString() {
-  local -r string="${1}"
-  sed 's,^[[:blank:]]*,,' <<< "${string}" | sed 's,[[:blank:]]*$,,'
+  # generated files
+  pool_hotkey_vk_file="${POOL_FOLDER}/${pool_name}/${POOL_HOTKEY_VK_FILENAME}"
+  pool_hotkey_sk_file="${POOL_FOLDER}/${pool_name}/${POOL_HOTKEY_SK_FILENAME}"
+  pool_opcert_counter_file="${POOL_FOLDER}/${pool_name}/${POOL_OPCERT_COUNTER_FILENAME}"
+  pool_saved_kes_start="${POOL_FOLDER}/${pool_name}/${POOL_CURRENT_KES_START}"
+  pool_opcert_file="${POOL_FOLDER}/${pool_name}/${POOL_OPCERT_FILENAME}"
+
+  getCurrentKESperiod
+  echo "${current_kes_period}" > ${pool_saved_kes_start}
+
+  say "creating new hot keys and certificate" 1
+  say "$ ${CCLI} node key-gen-KES --verification-key-file ${pool_hotkey_vk_file} --signing-key-file ${pool_hotkey_sk_file}" 2
+  if ! ${CCLI} node key-gen-KES --verification-key-file "${pool_hotkey_vk_file}" --signing-key-file "${pool_hotkey_sk_file}"; then return 1; fi
+  say "$ ${CCLI} node issue-op-cert --kes-verification-key-file ${pool_hotkey_vk_file} --cold-signing-key-file ${pool_coldkey_sk_file} --operational-certificate-issue-counter-file ${pool_opcert_counter_file} --kes-period ${current_kes_period} --out-file ${pool_opcert_file}" 2
+  if ! ${CCLI} node issue-op-cert --kes-verification-key-file "${pool_hotkey_vk_file}" --cold-signing-key-file "${pool_coldkey_sk_file}" --operational-certificate-issue-counter-file "${pool_opcert_counter_file}" --kes-period "${current_kes_period}" --out-file "${pool_opcert_file}"; then return 1; fi
+  chmod 700 ${POOL_FOLDER}/${pool_name}/*
+
+  kesExpiration "${current_kes_period}"
 }
