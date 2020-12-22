@@ -80,7 +80,14 @@ while getopts :lpb: opt; do
 done
 shift $((OPTIND -1))
 
-URL="https://raw.githubusercontent.com/cardano-community/guild-operators/${BRANCH}/scripts/cnode-helper-scripts"
+# Use hybrid branch by default
+if [[ -z ${BRANCH} ]]; then
+  BRANCH="hybrid"; 
+  echo "${BRANCH}" > "${CNODE_HOME}"/scripts/.env_branch;
+fi
+
+# URL="https://raw.githubusercontent.com/cardano-community/guild-operators/${BRANCH}/scripts/cnode-helper-scripts"
+URL="https://raw.githubusercontent.com/freemanzx/guild-operators/${BRANCH}/scripts/cnode-helper-scripts"
 if curl -s -m 10 -o "${PARENT}"/env.tmp ${URL}/env; then
   if [[ -f "${PARENT}"/env ]]; then
     if [[ $(grep "_HOME=" "${PARENT}"/env) =~ ^#?([^[:space:]]+)_HOME ]]; then
