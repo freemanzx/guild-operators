@@ -1002,6 +1002,7 @@ sendADA() {
   sAddr="$3"
   sKey="$4"
   inclFee="$5"
+  s_wallet="$6"
 
   say "" 1
   say "# Protocol Parameters" 1 "log"
@@ -1104,7 +1105,7 @@ sendADA() {
   if ! buildTx; then return 1; fi
   
   if [[ ${op_mode} = "hybrid" ]]; then
-    tx_tmp="${TX_DIR}/tx.raw_$(date +%s)"
+    tx_tmp="${TX_DIR}/tx.raw_$(date +%s)_s_${s_wallet}"
     if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
       say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
       return 1
@@ -1773,6 +1774,7 @@ withdrawRewards() {
   base_addr="$3"
   stake_addr="$4"
   reward_lovelace="$5"
+  wallet_name="$6"
 
   say "" 1
   say "# Protocol Parameters" 1 "log"
@@ -1845,7 +1847,7 @@ withdrawRewards() {
   if ! buildTx; then return 1; fi
   
   if [[ ${op_mode} = "hybrid" ]]; then
-    tx_tmp="${TX_DIR}/tx.raw_$(date +%s)"
+    tx_tmp="${TX_DIR}/tx.raw_$(date +%s)_wr_${wallet_name}"
     if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
       say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
       return 1

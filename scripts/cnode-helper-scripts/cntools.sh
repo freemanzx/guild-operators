@@ -1155,7 +1155,7 @@ EOF
       waitForInput && continue
     fi
 
-    if ! sendADA "${d_addr}" "${amountLovelace}" "${s_addr}" "${s_payment_sk_file}" "${include_fee}"; then
+    if ! sendADA "${d_addr}" "${amountLovelace}" "${s_addr}" "${s_payment_sk_file}" "${include_fee}" "${s_wallet}"; then
       waitForInput && continue
     fi
 
@@ -1372,7 +1372,7 @@ EOF
     say "$(printf "%s\t${FG_CYAN}%s${NC} ADA" "Funds"  "$(formatLovelace ${lovelace})")" "log"
     say "$(printf "%s\t${FG_CYAN}%s${NC} ADA" "Rewards"  "$(formatLovelace ${reward_lovelace})")" "log"
 
-    if ! withdrawRewards "${stake_sk_file}" "${payment_sk_file}" "${base_addr}" "${reward_addr}" ${reward_lovelace}; then
+    if ! withdrawRewards "${stake_sk_file}" "${payment_sk_file}" "${base_addr}" "${reward_addr}" ${reward_lovelace} ${wallet_name}; then
       waitForInput && continue
     fi
 
