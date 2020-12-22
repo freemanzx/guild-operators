@@ -212,7 +212,7 @@ EOF
 fileDialog() {
   dialogSetup
   local firstrow=$(get_cursor_row)
-  [[ -n $3 ]] && start_path="$3" || start_path="/tmp/"
+  [[ -n $3 ]] && start_path="$3" || start_path="${TEMP_DIR}/"
   if [[ $1 -eq 1 ]]; then
     say "\nFile Explorer:"
     say "  Tab        -  Select area to navigate"
@@ -230,7 +230,7 @@ fileDialog() {
 dirDialog() {
   dialogSetup
   local firstrow=$(get_cursor_row)
-  [[ -n $3 ]] && start_path="$3/" || start_path="/tmp/"
+  [[ -n $3 ]] && start_path="$3/" || start_path="${TEMP_DIR}/"
   if [[ $1 -eq 1 ]]; then
     say "\nDirectory Explorer:"
     say "  Tab        -  Select area to navigate"
@@ -1104,7 +1104,7 @@ sendADA() {
   if ! buildTx; then return 1; fi
   
   if [[ ${op_mode} = "hybrid" ]]; then
-    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    tx_tmp="${TEMP_DIR}/tx.raw_$(date +%s)"
     if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
       say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
       return 1
@@ -1213,7 +1213,7 @@ sendMetadata() {
   if ! buildTx; then return 1; fi
   
   if [[ ${op_mode} = "hybrid" ]]; then
-    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    tx_tmp="${TEMP_DIR}/tx.raw_$(date +%s)"
     if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
       say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
       return 1
@@ -1338,7 +1338,7 @@ registerStakeWallet() {
   
   if [[ ${op_mode} = "hybrid" ]]; then
     echo
-    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    tx_tmp="${TEMP_DIR}/tx.raw_$(date +%s)"
     if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
       say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
       return 1
@@ -1470,7 +1470,7 @@ deregisterStakeWallet() {
   
   if [[ ${op_mode} = "hybrid" ]]; then
     echo
-    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    tx_tmp="${TEMP_DIR}/tx.raw_$(date +%s)"
     if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
       say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
       return 1
@@ -1610,7 +1610,7 @@ registerPool() {
   if ! buildTx; then return 1; fi
   
   if [[ ${op_mode} = "hybrid" ]]; then
-    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    tx_tmp="${TEMP_DIR}/tx.raw_$(date +%s)"
     if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
       say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
       return 1
@@ -1740,7 +1740,7 @@ modifyPool() {
   if ! buildTx; then return 1; fi
   
   if [[ ${op_mode} = "hybrid" ]]; then
-    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    tx_tmp="${TEMP_DIR}/tx.raw_$(date +%s)"
     if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
       say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
       return 1
@@ -1845,7 +1845,7 @@ withdrawRewards() {
   if ! buildTx; then return 1; fi
   
   if [[ ${op_mode} = "hybrid" ]]; then
-    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    tx_tmp="${TEMP_DIR}/tx.raw_$(date +%s)"
     if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
       say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
       return 1
@@ -1957,7 +1957,7 @@ delegate() {
   if ! buildTx; then return 1; fi
   
   if [[ ${op_mode} = "hybrid" ]]; then
-    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    tx_tmp="${TEMP_DIR}/tx.raw_$(date +%s)"
     if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
       say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
       return 1
@@ -2066,7 +2066,7 @@ deRegisterPool() {
   if ! buildTx; then return 1; fi
   
   if [[ ${op_mode} = "hybrid" ]]; then
-    tx_tmp="/tmp/tx.raw_$(date +%s)"
+    tx_tmp="${TEMP_DIR}/tx.raw_$(date +%s)"
     if ! cp -f "${TMP_FOLDER}/tx.raw" "${tx_tmp}"; then
       say "${FG_RED}ERROR${NC}: unable to copy tx file to: ${tx_tmp}" 1>&2
       return 1
