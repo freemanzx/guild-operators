@@ -2217,9 +2217,11 @@ rotatePoolKeys() {
 
   # Confirm current KER period
   say "${ORANGE}WARN${NC}: Confirm if calculated current KES period ${ORANGE}${current_kes_period}${NC} is the same as the one on the network?\n"
-  case $(select_opt "[y] Yes" "[n] No") in
+  select_opt "[y] Yes" "[n] No" "[Esc] Cancel"
+  case $? in
     0) make_dump="yes" ;;
     1) make_dump="no" ;;
+    2) return 1 ;;
   esac
   if [[ ${make_dump} == "yes" ]]; then
 
