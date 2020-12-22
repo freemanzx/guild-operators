@@ -46,6 +46,12 @@ while getopts :ob: opt; do
 done
 shift $((OPTIND -1))
 
+# Use hybrid branch by default
+if [[ -z ${BRANCH} ]]; then
+  BRANCH="hybrid"; 
+  echo "${BRANCH}" > "${CNODE_HOME}"/scripts/.env_branch;
+fi
+
 # get common env variables
 if ! . "${CNODE_HOME}"/scripts/env; then
   [[ ${CNTOOLS_MODE} = "CONNECTED" ]] && exit 1
@@ -58,7 +64,8 @@ fi
 # get helper functions from library file
 . "${CNODE_HOME}"/scripts/cntools.library
 
-URL_RAW="https://raw.githubusercontent.com/cardano-community/guild-operators/${BRANCH}"
+# URL_RAW="https://raw.githubusercontent.com/cardano-community/guild-operators/${BRANCH}"
+URL_RAW="https://raw.githubusercontent.com/freemanzx/guild-operators/${BRANCH}"
 URL="${URL_RAW}/scripts/cnode-helper-scripts"
 URL_DOCS="${URL_RAW}/docs/Scripts"
 
@@ -2869,6 +2876,9 @@ EOF
       say "${pool_hotkey_sk_file}" "log"
       say "${pool_opcert_file}" "log"
       echo
+      mkdir -p ${KES_DIR}/${pool_name}
+      cp -v ${pool_hotkey_sk_file} ${KES_DIR}/${pool_name}/
+      cp -v ${pool_opcert_file} ${KES_DIR}/${pool_name}/
     fi
     say "Restart your pool node for changes to take effect"
 

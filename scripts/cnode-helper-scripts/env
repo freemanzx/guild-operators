@@ -16,6 +16,7 @@ CNODE_PORT=6000                                         # Set node port
 #LOG_DIR="${CNODE_HOME}/logs"                           # Folder where your logs will be sent to (must pre-exist)
 #DB_DIR="${CNODE_HOME}/db"                              # Folder to store the cardano-node blockchain db
 #TX_DIR="/tmp"                                          # Folder to store raw and signed transaction files
+#KES_DIR="/tmp"                                         # Folder to store rotated KES keys
 #EKG_HOST=127.0.0.1                                     # Set node EKG host
 #EKG_PORT=12788                                         # Override automatic detection of node EKG port
 #EKG_TIMEOUT=3                                          # Maximum time in seconds that you allow EKG request to take before aborting (node metrics)
@@ -236,6 +237,7 @@ fi
 [[ -n ${CNODE_LOG_DIR} ]] && LOG_DIR="${CNODE_LOG_DIR}" # compatibility with older topologyUpdater
 [[ -z ${DB_DIR} ]] && DB_DIR="${CNODE_HOME}/db"
 [[ -z ${TX_DIR} ]] && TX_DIR="/tmp"
+[[ -z ${KES_DIR} ]] && TX_DIR="/tmp"
 [[ -z ${WALLET_FOLDER} ]] && WALLET_FOLDER="${CNODE_HOME}/priv/wallet"
 [[ -z ${POOL_FOLDER} ]] && POOL_FOLDER="${CNODE_HOME}/priv/pool"
 [[ -z ${POOL_NAME} ]] && POOL_NAME="CHANGE_ME"
