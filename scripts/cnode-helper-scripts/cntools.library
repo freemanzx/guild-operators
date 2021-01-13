@@ -1370,6 +1370,11 @@ sendAda() {
     offline_tx="${TMP_FOLDER}/offline_tx_$(jq .id <<< ${offlineJSON}).json"
     jq -r . <<< "${offlineJSON}" > "${offline_tx}"
     echo
+    tx_tmp="${TX_DIR}/offline_tx_$(jq .id <<< ${offlineJSON}).json"
+    if ! cp -f "${offline_tx}" "${tx_tmp}"; then
+      say "${FG_RED}ERROR${NC}: unable to copy ${offline_tx} file to: ${tx_tmp}" 1>&2
+      return 1
+    fi
     println "Offline transaction successfully built and saved to: ${FG_CYAN}${offline_tx}${NC}" 
     println "DEBUG" "move file to offline computer and sign it using CNTools in offline mode '-o' [Transaction >> Sign] with:" 
     println "DEBUG" "Source Wallet ${FG_GREEN}${s_wallet} ${FG_CYAN}$(basename ${s_payment_sk_file})${NC}"  
@@ -1509,6 +1514,11 @@ withdrawRewards() {
     offline_tx="${TMP_FOLDER}/offline_tx_$(jq .id <<< ${offlineJSON}).json"
     jq -r . <<< "${offlineJSON}" > "${offline_tx}"
     echo
+    tx_tmp="${TX_DIR}/offline_tx_$(jq .id <<< ${offlineJSON}).json"
+    if ! cp -f "${offline_tx}" "${tx_tmp}"; then
+      say "${FG_RED}ERROR${NC}: unable to copy ${offline_tx} file to: ${tx_tmp}" 1>&2
+      return 1
+    fi
     println "Offline transaction successfully built and saved to: ${FG_CYAN}${offline_tx}${NC}" 
     println "DEBUG" "move file to offline computer and sign it using CNTools in offline mode '-o' [Transaction >> Sign] with:" 
     println "DEBUG" "Wallet ${FG_GREEN}${wallet_name} ${FG_CYAN}$(basename ${payment_sk_file})${NC}" 
