@@ -2844,7 +2844,7 @@ EOF
     println "DEBUG" "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
     echo
     [[ ${ENABLE_DIALOG} = "true" ]] && println "DEBUG" "Enter path to offline tx file to sign" && waitForInput "Press any key to open the file explorer"
-    fileDialog "Enter path to offline tx file to sign" "${TMP_FOLDER}/"
+    fileDialog "Enter path to offline tx file to sign" "${TX_DIR}/"
     println "DEBUG" "${FG_CYAN}${file}${NC}\n"
     offline_tx=${file}
     [[ -z "${offline_tx}" ]] && continue
@@ -2899,7 +2899,7 @@ EOF
           otx_signing_name=$(_jq '.name')
           println "DEBUG" "\n# Sign the transaction with: ${FG_CYAN}${otx_signing_name}${NC}"
           [[ ${ENABLE_DIALOG} = "true" ]] && waitForInput "Press any key to open the file explorer"
-          [[ ${otx_signing_name} = "Wallet "* ]] && dialog_start_path="${WALLET_FOLDER}" || dialog_start_path="${POOL_FOLDER}"
+          [[ ${otx_signing_name} = "Wallet "* ]] && dialog_start_path="${WALLET_FOLDER}/${wallet_name}" || dialog_start_path="${POOL_FOLDER}"
           fileDialog "Enter path to ${otx_signing_name}" "${dialog_start_path}/"
           [[ ! -f "${file}" ]] && println "ERROR" "${FG_RED}ERROR${NC}: file not found: ${file}" && waitForInput && continue 2
           otx_vkey_cborHex="$(_jq '.vkey.cborHex')"
