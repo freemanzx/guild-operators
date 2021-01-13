@@ -2054,7 +2054,7 @@ assembleTx() {
 signTx() {
   tx_raw="$1"
   shift
-  tx_signed="${TX_DIR}/tx.signed_$(date +%s)"
+  tx_signed="${TMP_FOLDER}/tx.signed_$(date +%s)"
   if [[ $# -gt 0 ]]; then # sign directly
     tx_sign_out=()
     hw_wallet='N'
