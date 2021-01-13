@@ -27,12 +27,17 @@ CNODE_PORT=6000                                         # Set node port
                                                         # Each wallet and pool has a friendly name and subfolder containing all related keys, certificates, ...
 #POOL_NAME=""                                           # Set the pool's name to run node as a core node (the name, NOT the ticker, ie folder name)
                                                         
+TG_BOT_TOKEN=""                                         # to enable telegramSend function create your own BOT-token and Chat-Id
+TG_CHAT_ID=""                                           # see https://cardano-community.github.io/guild-operators/#/Scripts/logmonitor#telegram-alerts 
+
 #WALLET_PAY_VK_FILENAME="payment.vkey"                  # Standardized names for all wallet related files
 #WALLET_PAY_SK_FILENAME="payment.skey"
+#WALLET_HW_PAY_SK_FILENAME="payment.hwsfile"
 #WALLET_PAY_ADDR_FILENAME="payment.addr"
 #WALLET_BASE_ADDR_FILENAME="base.addr"
 #WALLET_STAKE_VK_FILENAME="stake.vkey"
 #WALLET_STAKE_SK_FILENAME="stake.skey"
+#WALLET_HW_STAKE_SK_FILENAME="stake.hwsfile"
 #WALLET_STAKE_ADDR_FILENAME="reward.addr"
 #WALLET_STAKE_CERT_FILENAME="stake.cert"
 #WALLET_STAKE_DEREG_FILENAME="stake.dereg"
@@ -71,6 +76,16 @@ if [[ $(uname) == Darwin ]]; then
 fi
 
 [[ -z ${CURL_TIMEOUT} ]] && CURL_TIMEOUT=10
+
+# 
+telegramSend() {
+  if [[ -z "${TG_BOT_TOKEN}" ]] || [[ -z "${TG_CHAT_ID}" ]]; then
+    echo "Warn: to use the telegramSend function you must first set the bot and chat id in the env file"
+  else
+    TG_URL="https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage?parse_mode=Markdown"
+    TGAUE=$(curl -s -X POST $TG_URL -d chat_id=${TG_CHAT_ID} -d text="${HOSTNAME} $1");
+  fi
+}
 
 [[ -z "${CCLI}" ]] && CCLI=$(command -v cardano-cli)
 if [[ -z "${CCLI}" ]]; then
@@ -205,13 +220,17 @@ else
   [[ "${NWMAGIC}" = "1097911063" ]] && NETWORK_NAME="Testnet" || NETWORK_NAME="Custom"
 fi
 getEraIdentifier() {
-    if ${CCLI} query protocol-parameters --byron-era ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} &>/dev/null; then ERA_IDENTIFIER="--byron-era"
-  elif ${CCLI} query protocol-parameters --shelley-era ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} &>/dev/null; then ERA_IDENTIFIER="--shelley-era"
-  elif ${CCLI} query protocol-parameters --allegra-era ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} &>/dev/null; then ERA_IDENTIFIER="--allegra-era"
-  elif ${CCLI} query protocol-parameters --mary-era ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} &>/dev/null; then ERA_IDENTIFIER="--mary-era"
-  else ERA_IDENTIFIER="--shelley-era"; fi
+    if ${CCLI} query protocol-parameters --byron-era ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} &>/dev/null; then ERA_IDENTIFIER="--byron-era" && ERA_WITNESS="TxWitness ByronEra"
+  elif ${CCLI} query protocol-parameters --shelley-era ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} &>/dev/null; then ERA_IDENTIFIER="--shelley-era" && ERA_WITNESS="TxWitness ShelleyEra"
+  elif ${CCLI} query protocol-parameters --allegra-era ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} &>/dev/null; then ERA_IDENTIFIER="--allegra-era" && ERA_WITNESS="TxWitness AllegraEra"
+  elif ${CCLI} query protocol-parameters --mary-era ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} &>/dev/null; then ERA_IDENTIFIER="--mary-era" && ERA_WITNESS="TxWitness MaryEra"
+  else 
+    ERA_IDENTIFIER=""; ERA_WITNESS=""
+    [[ ${OFFLINE_MODE} = "N" ]] && return 1
+  fi
+  return 0
 }
-getEraIdentifier
+if ! getEraIdentifier && [[ ${OFFLINE_MODE} = "N" ]]; then echo "Failed to query protocol-parameters from node, not yet fully started?" && return 1; fi
 
 PROT_PARAMS="$(${CCLI} query protocol-parameters ${ERA_IDENTIFIER} ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} 2>&1)"
 if [[ -n "${PROT_PARAMS}" ]] && ! DECENTRALISATION=$(jq -er .decentralisationParam <<< ${PROT_PARAMS} 2>/dev/null); then DECENTRALISATION=0.5; fi
@@ -240,10 +259,12 @@ fi
 [[ -z ${POOL_DIR} ]] && POOL_DIR="${POOL_FOLDER}/${POOL_NAME}"
 [[ -z ${WALLET_PAY_VK_FILENAME} ]] && WALLET_PAY_VK_FILENAME="payment.vkey"
 [[ -z ${WALLET_PAY_SK_FILENAME} ]] && WALLET_PAY_SK_FILENAME="payment.skey"
+[[ -z ${WALLET_HW_PAY_SK_FILENAME} ]] && WALLET_HW_PAY_SK_FILENAME="payment.hwsfile"
 [[ -z ${WALLET_PAY_ADDR_FILENAME} ]] && WALLET_PAY_ADDR_FILENAME="payment.addr"
 [[ -z ${WALLET_BASE_ADDR_FILENAME} ]] && WALLET_BASE_ADDR_FILENAME="base.addr"
 [[ -z ${WALLET_STAKE_VK_FILENAME} ]] && WALLET_STAKE_VK_FILENAME="stake.vkey"
 [[ -z ${WALLET_STAKE_SK_FILENAME} ]] && WALLET_STAKE_SK_FILENAME="stake.skey"
+[[ -z ${WALLET_HW_STAKE_SK_FILENAME} ]] && WALLET_HW_STAKE_SK_FILENAME="stake.hwsfile"
 [[ -z ${WALLET_STAKE_ADDR_FILENAME} ]] && WALLET_STAKE_ADDR_FILENAME="reward.addr"
 [[ -z ${WALLET_STAKE_CERT_FILENAME} ]] && WALLET_STAKE_CERT_FILENAME="stake.cert"
 [[ -z ${WALLET_STAKE_DEREG_FILENAME} ]] && WALLET_STAKE_DEREG_FILENAME="stake.dereg"
