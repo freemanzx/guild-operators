@@ -3020,7 +3020,7 @@ EOF
     fi
     echo
     [[ ${ENABLE_DIALOG} = "true" ]] && println "DEBUG" "Enter path to offline tx file to submit" && waitForInput "Press any key to open the file explorer"
-    fileDialog "Enter path to offline tx file to submit" "${TMP_FOLDER}/"
+    fileDialog "Enter path to offline tx file to submit" "${TX_DIR}/"
     println "DEBUG" "${FG_CYAN}${file}${NC}\n"
     offline_tx=${file}
     [[ -z "${offline_tx}" ]] && continue
