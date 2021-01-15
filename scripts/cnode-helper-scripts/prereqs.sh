@@ -57,7 +57,7 @@ versionCheck() { printf '%s\n%s' "${1//v/}" "${2//v/}" | sort -C -V; } #$1=avail
 usage() {
   cat <<EOF >&2
 
-Usage: $(basename "$0") [-f] [-s] [-i] [-l] [-c] [-b <branch>] [-n <testnet|guild|launchpad>] [-t <name>] [-m <seconds>]
+Usage: $(basename "$0") [-f] [-s] [-i] [-l] [-c] [-w] [-p] [-b <branch>] [-n <testnet|guild|launchpad>] [-t <name>] [-m <seconds>]
 Install pre-requisites for building cardano node and using CNTools
 
 -f    Force overwrite of all files including normally saved user config sections in env, cnode.sh and gLiveView.sh
@@ -70,6 +70,7 @@ Install pre-requisites for building cardano node and using CNTools
 -l    Use IOG fork of libsodium - Recommended as per IOG instructions (Default: system build)
 -c    Install/Upgrade and build CNCLI with RUST
 -w    Install/Upgrade Vacuumlabs cardano-hw-cli for hardware wallet support
+-p    Install/Upgrade PostgREST binary to query postgres DB as a service
 -b    Use alternate branch of scripts to download - only recommended for testing/development (Default: master)
 -i    Interactive mode (Default: silent mode)
 
@@ -77,7 +78,7 @@ EOF
   exit 1
 }
 
-while getopts :in:sflcwt:m:b: opt; do
+while getopts :in:sflcwpt:m:b: opt; do
   case ${opt} in
     i ) INTERACTIVE='Y' ;;
     n ) NETWORK=${OPTARG} ;;
@@ -86,6 +87,7 @@ while getopts :in:sflcwt:m:b: opt; do
     l ) LIBSODIUM_FORK='Y' ;;
     c ) INSTALL_CNCLI='Y' ;;
     w ) INSTALL_VCHC='Y' ;;
+    p ) INSTALL_POSTGREST='Y' ;;
     t ) CNODE_NAME=${OPTARG//[^[:alnum:]]/_} ;;
     m ) CURL_TIMEOUT=${OPTARG} ;;
     b ) BRANCH=${OPTARG} ;;
@@ -101,6 +103,7 @@ shift $((OPTIND -1))
 [[ -z ${LIBSODIUM_FORK} ]] && LIBSODIUM_FORK='N'
 [[ -z ${INSTALL_CNCLI} ]] && INSTALL_CNCLI='N'
 [[ -z ${INSTALL_VCHC} ]] && INSTALL_VCHC='N'
+[[ -z ${INSTALL_POSTGREST} ]] && INSTALL_POSTGREST='N'
 [[ -z ${CNODE_NAME} ]] && CNODE_NAME='cnode'
 [[ -z ${INTERACTIVE} ]] && INTERACTIVE='N'
 [[ -z ${CURL_TIMEOUT} ]] && CURL_TIMEOUT=60
@@ -123,32 +126,32 @@ REPO="https://github.com/cardano-community/guild-operators"
 REPO_RAW="https://raw.githubusercontent.com/cardano-community/guild-operators"
 URL_RAW="${REPO_RAW}/${BRANCH}"
 
-# Check if prereqs.sh update is available
-PARENT="$(dirname $0)"
-if [[ ${UPDATE_CHECK} = 'Y' ]] && curl -s -m ${CURL_TIMEOUT} -o "${PARENT}"/prereqs.sh.tmp ${URL_RAW}/scripts/cnode-helper-scripts/prereqs.sh 2>/dev/null; then
-  TEMPL_CMD=$(awk '/^# Do NOT modify/,0' "${PARENT}"/prereqs.sh)
-  TEMPL2_CMD=$(awk '/^# Do NOT modify/,0' "${PARENT}"/prereqs.sh.tmp)
-  if [[ "$(echo ${TEMPL_CMD} | sha256sum)" != "$(echo ${TEMPL2_CMD} | sha256sum)" ]]; then
-    if get_answer "A new version of prereqs script is available, do you want to download the latest version?"; then
-      cp "${PARENT}"/prereqs.sh "${PARENT}/prereqs.sh_bkp$(date +%s)"
-      STATIC_CMD=$(awk '/#!/{x=1}/^# Do NOT modify/{exit} x' "${PARENT}"/prereqs.sh)
-      printf '%s\n%s\n' "$STATIC_CMD" "$TEMPL2_CMD" > "${PARENT}"/prereqs.sh.tmp
-      {
-        mv -f "${PARENT}"/prereqs.sh.tmp "${PARENT}"/prereqs.sh && \
-        chmod 755 "${PARENT}"/prereqs.sh && \
-        echo -e "\nUpdate applied successfully, please run prereqs again!\n" && \
-        exit 0; 
-      } || {
-        echo -e "Update failed!\n\nPlease manually download latest version of prereqs.sh script from GitHub" && \
-        exit 1;
-      }
-    fi
-  fi
-fi
-rm -f "${PARENT}"/prereqs.sh.tmp
-
 if [ "${INTERACTIVE}" = 'Y' ]; then
   clear;
+  # Check if prereqs.sh update is available
+  PARENT="$(dirname $0)"
+  if [[ ${UPDATE_CHECK} = 'Y' ]] && curl -s -m ${CURL_TIMEOUT} -o "${PARENT}"/prereqs.sh.tmp ${URL_RAW}/scripts/cnode-helper-scripts/prereqs.sh 2>/dev/null; then
+    TEMPL_CMD=$(awk '/^# Do NOT modify/,0' "${PARENT}"/prereqs.sh)
+    TEMPL2_CMD=$(awk '/^# Do NOT modify/,0' "${PARENT}"/prereqs.sh.tmp)
+    if [[ "$(echo ${TEMPL_CMD} | sha256sum)" != "$(echo ${TEMPL2_CMD} | sha256sum)" ]]; then
+      if get_answer "A new version of prereqs script is available, do you want to download the latest version?"; then
+        cp "${PARENT}"/prereqs.sh "${PARENT}/prereqs.sh_bkp$(date +%s)"
+        STATIC_CMD=$(awk '/#!/{x=1}/^# Do NOT modify/{exit} x' "${PARENT}"/prereqs.sh)
+        printf '%s\n%s\n' "$STATIC_CMD" "$TEMPL2_CMD" > "${PARENT}"/prereqs.sh.tmp
+        {
+          mv -f "${PARENT}"/prereqs.sh.tmp "${PARENT}"/prereqs.sh && \
+          chmod 755 "${PARENT}"/prereqs.sh && \
+          echo -e "\nUpdate applied successfully, please run prereqs again!\n" && \
+          exit 0; 
+        } || {
+          echo -e "Update failed!\n\nPlease manually download latest version of prereqs.sh script from GitHub" && \
+          exit 1;
+        }
+      fi
+    fi
+  fi
+  rm -f "${PARENT}"/prereqs.sh.tmp
+
   CNODE_PATH=$(get_input "Please enter the project path" ${CNODE_PATH})
   CNODE_NAME=$(get_input "Please enter directory name" ${CNODE_NAME})
   CNODE_HOME=${CNODE_PATH}/${CNODE_NAME}
@@ -168,6 +171,7 @@ if [ "$WANT_BUILD_DEPS" = 'Y' ]; then
   # Determine OS platform
   OS_ID=$(grep -i ^id_like= /etc/os-release | cut -d= -f 2)
   DISTRO=$(grep -i ^NAME= /etc/os-release | cut -d= -f 2)
+  VERSION_ID=$(grep -i ^version_id= /etc/os-release | cut -d= -f 2 | tr -d '"')
 
   if [[ "${OS_ID}" =~ ebian ]] || [[ "${DISTRO}" =~ ebian ]]; then
     #Debian/Ubuntu
@@ -191,9 +195,14 @@ if [ "$WANT_BUILD_DEPS" = 'Y' ]; then
     $sudo yum -y install curl > /dev/null
     $sudo yum -y update > /dev/null
     echo "  Installing missing prerequisite packages, if any.."
-    pkg_list="python3 coreutils pkgconfig libffi-devel gmp-devel openssl-devel ncurses-libs ncurses-compat-libs systemd systemd-devel libsodium-devel zlib-devel make gcc-c++ tmux git jq gnupg libtool autoconf srm iproute bc tcptraceroute dialog sqlite util-linux xz libusb-devel"
+    pkg_list="python3 coreutils pkgconfig libffi-devel gmp-devel openssl-devel ncurses-libs ncurses-compat-libs systemd systemd-devel libsodium-devel zlib-devel make gcc-c++ tmux git jq gnupg libtool autoconf srm iproute bc tcptraceroute dialog sqlite util-linux xz"
+    if [[ "${VERSION_ID}" == "7" ]]; then
+      pkg_list="${pkg_list} libusb"
+    elif [[ "${VERSION_ID}" == "8" ]] || [[ "${DISTRO}" =~ Fedora ]]; then
+      pkg_list="${pkg_list} libusbx"
+    fi
     [[ ! "${DISTRO}" =~ Fedora ]] && $sudo yum -y install epel-release > /dev/null
-    $sudo yum -y install ${pkg_list} > /dev/null;rc=$?
+    $sudo yum -y --allowerasing install ${pkg_list} > /dev/null;rc=$?
     if [ $rc != 0 ]; then
       echo "An error occurred while installing the prerequisite packages, please investigate by using the command below:"
       echo "sudo yum -y install ${pkg_list}"
@@ -296,6 +305,7 @@ if [[ "${INSTALL_CNCLI}" = "Y" ]]; then
     if ! command -v "rustup" &>/dev/null; then
       echo "  installing RUST..."
       if ! output=$(curl --proto '=https' --tlsv1.2 https://sh.rustup.rs -sSf | sh -s -- -y 2>&1); then echo -e "${output}" && err_exit; fi
+      . $HOME/.cargo/env
       if ! output=$(rustup install stable 2>&1); then echo -e "${output}" && err_exit; fi
       if ! output=$(rustup default stable 2>&1); then echo -e "${output}" && err_exit; fi
     else
@@ -335,7 +345,7 @@ if [[ "${INSTALL_VCHC}" = "Y" ]]; then
       fi
       if [[ ! -f "/etc/udev/rules.d/20-hw1.rules" ]]; then
         # Ledger udev rules
-        wget -q -O - https://raw.githubusercontent.com/LedgerHQ/udev-rules/master/add_udev_rules.sh | $sudo bash
+        curl -s -m ${CURL_TIMEOUT} https://raw.githubusercontent.com/LedgerHQ/udev-rules/master/add_udev_rules.sh | $sudo bash
         $sudo sed -e "s@TAG+=\"uaccess\"@OWNER=\"$USER\", TAG+=\"uaccess\"@g" -i /etc/udev/rules.d/20-hw1.rules
       fi
       if [[ ! -f "/etc/udev/rules.d/51-trezor.rules" ]]; then
@@ -356,6 +366,33 @@ if [[ "${INSTALL_VCHC}" = "Y" ]]; then
   fi
 fi
 
+if [[ "${INSTALL_POSTGREST}" = "Y" ]]; then
+  echo "Installing PostgREST"
+  if command -v postgrest >/dev/null; then pgrest_version="$(postgrest -h 2>/dev/null | grep 'PostgREST ' | awk '{print $2}')"; else pgrest_version="0.0.0"; fi
+  echo "  downloading PostgREST archive..."
+  pushd /tmp >/dev/null || err_exit
+  rm -rf postgrest-v*
+  pgrest_asset_url="$(curl -s https://api.github.com/repos/PostgREST/postgrest/releases/latest | jq -r '.assets[].browser_download_url' | grep 'linux-x64-static.tar.xz')"
+  if curl -sL -m ${CURL_TIMEOUT} -o postgrest-linux-x64.tar.xz ${pgrest_asset_url}; then
+    tar xf postgrest-linux-x64.tar.xz &>/dev/null
+    rm -f postgrest-linux-x64.tar.xz
+    [[ -f postgrest ]] || err_exit "ERROR!! postgrest archive downloaded but binary not found after attempting to extract package!"
+    pgrest_git_version="$(./postgrest -h 2>/dev/null | grep 'PostgREST ' | awk '{print $2}')"
+    if ! versionCheck "${pgrest_git_version}" "${pgrest_version}"; then
+      [[ ${pgrest_version} = "0.0.0" ]] && echo "  latest version: ${pgrest_git_version}" || echo "  installed version: ${pgrest_version}  |  latest version: ${pgrest_git_version}"
+      [[ ! -d "${HOME}"/.cabal/bin ]] && mkdir -p "${HOME}"/.cabal/bin
+      pushd "${HOME}"/.cabal/bin >/dev/null || err_exit
+      mv -f /tmp/postgrest .
+      echo "  postgrest ${vchc_git_version} installed!"
+    else
+      rm -rf postgrest #cleanup in /tmp
+      echo "  postgrest already latest version [${pgrest_version}], skipping!"
+    fi
+  else
+    err_exit "ERROR!! Download of latest release of postgrest from GitHub failed! Please retry or manually install"
+  fi
+fi
+
 $sudo mkdir -p "${CNODE_HOME}"/files "${CNODE_HOME}"/db "${CNODE_HOME}"/guild-db "${CNODE_HOME}"/logs "${CNODE_HOME}"/scripts "${CNODE_HOME}"/sockets "${CNODE_HOME}"/priv
 $sudo chown -R "$U_ID":"$G_ID" "${CNODE_HOME}" 2>/dev/null
 
@@ -370,6 +407,10 @@ else
   echo "${BRANCH}" > "${CNODE_HOME}"/scripts/.env_branch
 fi
 
+# Download dbsync config
+curl -sL -m ${CURL_TIMEOUT} -o dbsync.json.tmp ${URL_RAW}/files/dbsync.json
+
+# Download node config, genesis and topology from template
 if [[ ${NETWORK} = "testnet" ]]; then
   curl -sL -m ${CURL_TIMEOUT} -o byron-genesis.json.tmp https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/testnet-byron-genesis.json
   curl -sL -m ${CURL_TIMEOUT} -o genesis.json.tmp https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/testnet-shelley-genesis.json
@@ -394,10 +435,12 @@ fi
 sed -e "s@/opt/cardano/cnode@${CNODE_HOME}@g" -i ./*.json.tmp
 [[ ${FORCE_OVERWRITE} = 'Y' && -f topology.json ]] && cp -f topology.json "topology.json_bkp$(date +%s)"
 [[ ${FORCE_OVERWRITE} = 'Y' && -f config.json ]] && cp -f config.json "config.json_bkp$(date +%s)"
+[[ ${FORCE_OVERWRITE} = 'Y' && -f dbsync.json ]] && cp -f dbsync.json "dbsync.json_bkp$(date +%s)"
 if [[ ${FORCE_OVERWRITE} = 'Y' || ! -f byron-genesis.json ]]; then mv -f byron-genesis.json.tmp byron-genesis.json; else rm -f byron-genesis.json.tmp; fi
 if [[ ${FORCE_OVERWRITE} = 'Y' || ! -f genesis.json ]]; then mv -f genesis.json.tmp genesis.json; else rm -f genesis.json.tmp; fi
 if [[ ${FORCE_OVERWRITE} = 'Y' || ! -f topology.json ]]; then mv -f topology.json.tmp topology.json; else rm -f topology.json.tmp; fi
 if [[ ${FORCE_OVERWRITE} = 'Y' || ! -f config.json ]]; then mv -f config.json.tmp config.json; else rm -f config.json.tmp; fi
+if [[ ${FORCE_OVERWRITE} = 'Y' || ! -f dbsync.json ]]; then mv -f dbsync.json.tmp dbsync.json; else rm -f dbsync.json.tmp; fi
 
 pushd "${CNODE_HOME}"/scripts >/dev/null || err_exit
 curl -s -m ${CURL_TIMEOUT} -o env.tmp ${URL_RAW}/scripts/cnode-helper-scripts/env
@@ -439,7 +482,7 @@ updateWithCustomConfig() {
   mv -f ${file}.tmp ${file}
 }
 
-[[ ${FORCE_OVERWRITE} = 'Y' ]] && echo "Forced full upgrade! Please edit scripts/env, scripts/cnode.sh, scripts/gLiveView.sh and scripts/topologyUpdater.sh (alongwith files/topology.json, files/config.json) as required/"
+[[ ${FORCE_OVERWRITE} = 'Y' ]] && echo "Forced full upgrade! Please edit scripts/env, scripts/cnode.sh, scripts/gLiveView.sh and scripts/topologyUpdater.sh (alongwith files/topology.json, files/config.json, files/dbsync.json) as required/"
 
 updateWithCustomConfig "env"
 updateWithCustomConfig "cnode.sh"
