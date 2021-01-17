@@ -203,8 +203,10 @@ else
   [[ ! -f "${BYRON_GENESIS_JSON}" ]] && echo "Byron genesis file not found: ${BYRON_GENESIS_JSON}" && return 1
 fi
 
+[[ -z ${POOL_NAME} ]] && POOL_NAME="CHANGE_ME"
 [[ -z ${BLOCKLOG_DIR} ]] && BLOCKLOG_DIR="${CNODE_HOME}/guild-db/blocklog"
-BLOCKLOG_DB="${BLOCKLOG_DIR}/blocklog.db"
+[[ -z ${BLOCKLOG_DB_NAME} ]] && BLOCKLOG_DB_NAME="blocklog_${POOL_NAME}.db"
+BLOCKLOG_DB="${BLOCKLOG_DIR}/${BLOCKLOG_DB_NAME}"
 [[ -z ${BLOCKLOG_TZ} ]] && BLOCKLOG_TZ="UTC"
 [[ -z ${CNODE_PORT} ]] && CNODE_PORT=6000
 
@@ -260,7 +262,6 @@ fi
 [[ -z ${KES_DIR} ]] && TX_DIR="/tmp"
 [[ -z ${WALLET_FOLDER} ]] && WALLET_FOLDER="${CNODE_HOME}/priv/wallet"
 [[ -z ${POOL_FOLDER} ]] && POOL_FOLDER="${CNODE_HOME}/priv/pool"
-[[ -z ${POOL_NAME} ]] && POOL_NAME="CHANGE_ME"
 [[ -z ${POOL_DIR} ]] && POOL_DIR="${POOL_FOLDER}/${POOL_NAME}"
 [[ -z ${WALLET_PAY_VK_FILENAME} ]] && WALLET_PAY_VK_FILENAME="payment.vkey"
 [[ -z ${WALLET_PAY_SK_FILENAME} ]] && WALLET_PAY_SK_FILENAME="payment.skey"

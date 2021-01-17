@@ -2,7 +2,83 @@
 #shellcheck disable=SC2086
 #shellcheck source=/dev/null
 
+#################################
+
+usage() {
+  cat <<EOF >&2
+
+Usage: $(basename "$0") [operation <sub arg>]
+Script to run CNCLI, best launched through systemd deployed by 'deploy-as-systemd.sh'
+
+sync        Start CNCLI chainsync process that connects to cardano-node to sync blocks stored in SQLite DB (deployed as service)
+leaderlog   One-time leader schedule calculation for current epoch, then continously monitors and calculates schedule for coming epochs, 1.5 days before epoch boundary on MainNet (deployed as service)
+  -f        [force] Manually force leaderlog calculation and overwrite even if already done, exits after leaderlog is calculated
+validate    Continously monitor and confirm that the blocks made actually was accepted and adopted by chain (deployed as service)
+  -a        [all] One-time re-validation of all blocks in blocklog db
+  -e        [epoch] One-time re-validation of blocks in blocklog db for the specified epoch 
+  -p        [pool name] Name of the Pool Stake folder
+ptsendtip   Send node tip to PoolTool for network analysis and to show that your node is alive and well with a green badge (deployed as service)
+ptsendslots Securely sends PoolTool the number of slots you have assigned for an epoch and validates the correctness of your past epochs (deployed as service)
+init        One-time initialization adding all minted and confirmed blocks to blocklog
+migrate     One-time migration from old blocklog(cntoolsBlockCollector) to new format (post cncli)
+  -p        [path] Path to the old cntoolsBlockCollector blocklog folder holding json files with blocks created
+
+EOF
+  exit 1
+}
+
+#################################
+
+subcommand=$1
+shift # Remove subcommand from the argument list
+
+case ${subcommand} in
+  leaderlog )
+    while getopts ":fp:" opt; do
+      case ${opt} in
+        f )
+          subarg="force";;
+        p )
+          POOL_NAME=$OPTARG;;
+        \? )
+          echo "Invalid Option: -$OPTARG" 1>&2
+          usage
+          exit 1;;
+      esac
+    done
+    shift $((OPTIND -1));;
+  validate )
+    while getopts ":ae:p:" opt; do
+      case ${opt} in
+        a )
+          subarg="all";;
+        e )
+          subarg=$OPTARG;;
+        p )
+          POOL_NAME=$OPTARG;;
+        \? )
+          echo "Invalid Option: -$OPTARG" 1>&2
+          usage
+          exit 1;;
+        : )
+          echo "Invalid Option: -$OPTARG requires an argument" 1>&2
+          usage
+          exit 1;;
+      esac
+    done
+    shift $((OPTIND -1));;
+  * ) usage ;;
+esac
+
 . "$(dirname $0)"/env offline # source env in offline mode to get basic variables, sourced in online mode later in cncliInit()
+
+echo SUBCOMMAND=${subcommand}
+echo SUBARG=${subarg}
+
+echo POOL_NAME=${POOL_NAME};
+echo POOL_DIR=${POOL_DIR};
+echo BLOCKLOG_DB_NAME=${BLOCKLOG_DB_NAME};
+echo BLOCKLOG_DB=${BLOCKLOG_DB};
 
 ######################################
 # User Variables - Change as desired #
@@ -27,35 +103,6 @@
 # Do NOT modify code below           #
 ######################################
 
-usage() {
-  cat <<EOF >&2
-
-Usage: $(basename "$0") [operation <sub arg>]
-Script to run CNCLI, best launched through systemd deployed by 'deploy-as-systemd.sh'
-
-sync        Start CNCLI chainsync process that connects to cardano-node to sync blocks stored in SQLite DB (deployed as service)
-leaderlog   One-time leader schedule calculation for current epoch, then continously monitors and calculates schedule for coming epochs, 1.5 days before epoch boundary on MainNet (deployed as service)
-  force     Manually force leaderlog calculation and overwrite even if already done, exits after leaderlog is calculated
-validate    Continously monitor and confirm that the blocks made actually was accepted and adopted by chain (deployed as service)
-  all       One-time re-validation of all blocks in blocklog db
-  epoch     One-time re-validation of blocks in blocklog db for the specified epoch 
-ptsendtip   Send node tip to PoolTool for network analysis and to show that your node is alive and well with a green badge (deployed as service)
-ptsendslots Securely sends PoolTool the number of slots you have assigned for an epoch and validates the correctness of your past epochs (deployed as service)
-init        One-time initialization adding all minted and confirmed blocks to blocklog
-migrate     One-time migration from old blocklog(cntoolsBlockCollector) to new format (post cncli)
-  path      Path to the old cntoolsBlockCollector blocklog folder holding json files with blocks created
-
-EOF
-  exit 1
-}
-
-if [[ $# -eq 1 ]]; then
-  subcommand=$1
-  subarg=""
-elif [[ $# -eq 2 ]]; then
-  subcommand=$1
-  subarg=$2
-else usage; fi
 
 #################################
 # helper functions

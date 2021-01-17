@@ -33,6 +33,7 @@ CNTools - The Cardano SPOs best friend
 
 -o    Activate offline mode - run CNTools in offline mode without node access, a limited set of functions available
 -b    Run CNTools and look for updates on alternate branch instead of master of guild repository (only for testing/development purposes)
+-p    Folder Pool Name
 EOF
 }
 
@@ -40,10 +41,11 @@ CNTOOLS_MODE="CONNECTED"
 PARENT="$(dirname $0)"
 [[ -f "${PARENT}"/.env_branch ]] && BRANCH="$(cat "${PARENT}"/.env_branch)" || BRANCH="master"
 
-while getopts :ob: opt; do
+while getopts :ob:p: opt; do
   case ${opt} in
     o ) CNTOOLS_MODE="OFFLINE" ;;
     b ) BRANCH=${OPTARG}; echo "${BRANCH}" > "${PARENT}"/.env_branch ;;
+    p ) POOL_NAME=${OPTARG};;
     \? ) myExit 1 "$(usage)" ;;
     esac
 done
@@ -2308,7 +2310,7 @@ EOF
     epoch=$(getEpoch)
     eMax=$(jq -r '.eMax' "${TMP_FOLDER}"/protparams.json)
 
-    println "DEBUG" "Current epoch: ${FG_CYAN}${epoch}${NC}"
+    println "DEBUG" "Current epoch: ${FG_CYAN}${epoch}${NC}\tPool Name: ${FG_CYAN}${POOL_NAME}${NC}"
     epoch_start=$((epoch + 1))
     epoch_end=$((epoch + eMax))
     println "DEBUG" "earlist epoch to retire pool is ${FG_CYAN}${epoch_start}${NC} and latest ${FG_CYAN}${epoch_end}${NC}"
@@ -3291,7 +3293,7 @@ EOF
     waitForInput && continue
   fi
   current_epoch=$(getEpoch)
-  println "DEBUG" "Current epoch: ${FG_CYAN}${current_epoch}${NC}\n"
+  println "DEBUG" "Current epoch: ${FG_CYAN}${current_epoch}${NC}\tPool Name: ${FG_CYAN}${POOL_NAME}${NC}\n"
   println "DEBUG" "Show a block summary for all epochs or a detailed view for a specific epoch?"
   select_opt "[s] Summary" "[e] Epoch" "[Esc] Cancel"
   case $? in
@@ -3308,7 +3310,7 @@ EOF
          println " >> BLOCKS"
          println "DEBUG" "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
          current_epoch=$(getEpoch)
-         println "DEBUG" "Current epoch: ${FG_CYAN}${current_epoch}${NC}\n"
+         println "DEBUG" "Current epoch: ${FG_CYAN}${current_epoch}${NC}\tPool Name: ${FG_CYAN}${POOL_NAME}${NC}\n"
          if [[ ${view} -eq 1 ]]; then
            [[ $(sqlite3 "${BLOCKLOG_DB}" "SELECT EXISTS(SELECT 1 FROM blocklog WHERE epoch=$((current_epoch+1)) LIMIT 1);" 2>/dev/null) -eq 1 ]] && ((current_epoch++))
            first_epoch=$(( current_epoch - epoch_enter ))
@@ -3382,7 +3384,7 @@ EOF
          println " >> BLOCKS"
          println "DEBUG" "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
          current_epoch=$(getEpoch)
-         println "DEBUG" "Current epoch: ${FG_CYAN}${current_epoch}${NC}\n"
+         println "DEBUG" "Current epoch: ${FG_CYAN}${current_epoch}${NC}\tPool Name: ${FG_CYAN}${POOL_NAME}${NC}\n"
          invalid_cnt=$(sqlite3 "${BLOCKLOG_DB}" "SELECT COUNT(*) FROM blocklog WHERE epoch=${epoch_enter} AND status='invalid';" 2>/dev/null)
          missed_cnt=$(sqlite3 "${BLOCKLOG_DB}" "SELECT COUNT(*) FROM blocklog WHERE epoch=${epoch_enter} AND status='missed';" 2>/dev/null)
          ghosted_cnt=$(sqlite3 "${BLOCKLOG_DB}" "SELECT COUNT(*) FROM blocklog WHERE epoch=${epoch_enter} AND status='ghosted';" 2>/dev/null)
