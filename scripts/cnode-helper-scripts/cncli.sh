@@ -33,6 +33,7 @@ subcommand=$1
 shift # Remove subcommand from the argument list
 
 case ${subcommand} in
+  sync ) ;;
   leaderlog )
     while getopts ":fp:" opt; do
       case ${opt} in
