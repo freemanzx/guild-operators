@@ -5,6 +5,47 @@ All notable changes to this tool will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.1.6] - 2021-02-10
+- Update curl commands when file isnt downloaded correctly (to give correct return code)
+
+## [7.1.5] - 2021-02-03
+
+##### Changed
+- Guild Announcement/Support Telegram channel added to CNTools GUI
+
+##### Fixed
+- Fix for a special case using an incomplete wallet (missing stake keys) 
+
+## [7.1.4] - 2021-02-01
+
+##### Fixed
+- Typo in function name after harmonization between scripts
+
+## [7.1.3] - 2021-01-30
+
+##### Fixed
+- Vacuumlabs cardano-hw-cli 1.1.3 support, now the minimum supported version
+- Improved error handling
+
+## [7.1.1] - 2021-01-29
+
+##### Changed
+- Minor change to future update notification for common env file
+
+## [7.1.0] - 2021-01-29
+
+##### Changed
+- Remove ChainDB metrics references to align with cardano-node 1.25.1
+- Moved some functions to env for reusability between tools
+
+## [7.0.2] - 2021-01-17
+
+##### Changed
+- Re-add the option in offline workflow to use wallet folder that only contains stake keys for multi-owner pools
+
+##### Fixed
+- Verification of signing key in offline mode for extended signing keys (mnemonics imported wallets)
+
 ## [7.0.1] - 2021-01-13
 
 ##### Changed
