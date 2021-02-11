@@ -32,7 +32,6 @@ get_input() {
 }
 
 get_answer() {
-
   printf "%s (yes/no): " "$*" >&2; read -r answer
   while : 
   do
@@ -57,13 +56,13 @@ versionCheck() { printf '%s\n%s' "${1//v/}" "${2//v/}" | sort -C -V; } #$1=avail
 usage() {
   cat <<EOF >&2
 
-Usage: $(basename "$0") [-f] [-s] [-i] [-l] [-c] [-w] [-p] [-b <branch>] [-n <testnet|guild|launchpad>] [-t <name>] [-m <seconds>]
+Usage: $(basename "$0") [-f] [-s] [-i] [-l] [-c] [-w] [-p] [-b <branch>] [-n <mainnet|testnet|launchpad|guild|staging>] [-t <name>] [-m <seconds>]
 Install pre-requisites for building cardano node and using CNTools
 
 -f    Force overwrite of all files including normally saved user config sections in env, cnode.sh and gLiveView.sh
       topology.json, config.json and genesis files normally saved will also be overwritten
 -s    Skip installing OS level dependencies (Default: will check and install any missing OS level prerequisites)
--n    Connect to specified network instead of public network (Default: connect to public cardano network)
+-n    Connect to specified network instead of mainnet network (Default: connect to cardano mainnet network)
       eg: -n testnet
 -t    Alternate name for top level folder, non alpha-numeric chars will be replaced with underscore (Default: cnode)
 -m    Maximum time in seconds that you allow the file download operation to take before aborting (Default: 60s)
@@ -126,32 +125,32 @@ REPO="https://github.com/cardano-community/guild-operators"
 REPO_RAW="https://raw.githubusercontent.com/cardano-community/guild-operators"
 URL_RAW="${REPO_RAW}/${BRANCH}"
 
-if [ "${INTERACTIVE}" = 'Y' ]; then
-  clear;
-  # Check if prereqs.sh update is available
-  PARENT="$(dirname $0)"
-  if [[ ${UPDATE_CHECK} = 'Y' ]] && curl -s -m ${CURL_TIMEOUT} -o "${PARENT}"/prereqs.sh.tmp ${URL_RAW}/scripts/cnode-helper-scripts/prereqs.sh 2>/dev/null; then
-    TEMPL_CMD=$(awk '/^# Do NOT modify/,0' "${PARENT}"/prereqs.sh)
-    TEMPL2_CMD=$(awk '/^# Do NOT modify/,0' "${PARENT}"/prereqs.sh.tmp)
-    if [[ "$(echo ${TEMPL_CMD} | sha256sum)" != "$(echo ${TEMPL2_CMD} | sha256sum)" ]]; then
-      if get_answer "A new version of prereqs script is available, do you want to download the latest version?"; then
-        cp "${PARENT}"/prereqs.sh "${PARENT}/prereqs.sh_bkp$(date +%s)"
-        STATIC_CMD=$(awk '/#!/{x=1}/^# Do NOT modify/{exit} x' "${PARENT}"/prereqs.sh)
-        printf '%s\n%s\n' "$STATIC_CMD" "$TEMPL2_CMD" > "${PARENT}"/prereqs.sh.tmp
-        {
-          mv -f "${PARENT}"/prereqs.sh.tmp "${PARENT}"/prereqs.sh && \
-          chmod 755 "${PARENT}"/prereqs.sh && \
-          echo -e "\nUpdate applied successfully, please run prereqs again!\n" && \
-          exit 0; 
-        } || {
-          echo -e "Update failed!\n\nPlease manually download latest version of prereqs.sh script from GitHub" && \
-          exit 1;
-        }
-      fi
+# Check if prereqs.sh update is available
+PARENT="$(dirname $0)"
+if [[ ${UPDATE_CHECK} = 'Y' ]] && curl -s -f -m ${CURL_TIMEOUT} -o "${PARENT}"/prereqs.sh.tmp ${URL_RAW}/scripts/cnode-helper-scripts/prereqs.sh 2>/dev/null; then
+  TEMPL_CMD=$(awk '/^# Do NOT modify/,0' "${PARENT}"/prereqs.sh)
+  TEMPL2_CMD=$(awk '/^# Do NOT modify/,0' "${PARENT}"/prereqs.sh.tmp)
+  if [[ "$(echo ${TEMPL_CMD} | sha256sum)" != "$(echo ${TEMPL2_CMD} | sha256sum)" ]]; then
+    if get_answer "A new version of prereqs script is available, do you want to download the latest version?"; then
+      cp "${PARENT}"/prereqs.sh "${PARENT}/prereqs.sh_bkp$(date +%s)"
+      STATIC_CMD=$(awk '/#!/{x=1}/^# Do NOT modify/{exit} x' "${PARENT}"/prereqs.sh)
+      printf '%s\n%s\n' "$STATIC_CMD" "$TEMPL2_CMD" > "${PARENT}"/prereqs.sh.tmp
+      {
+        mv -f "${PARENT}"/prereqs.sh.tmp "${PARENT}"/prereqs.sh && \
+        chmod 755 "${PARENT}"/prereqs.sh && \
+        echo -e "\nUpdate applied successfully, please run prereqs again!\n" && \
+        exit 0; 
+      } || {
+        echo -e "Update failed!\n\nPlease manually download latest version of prereqs.sh script from GitHub" && \
+        exit 1;
+      }
     fi
   fi
-  rm -f "${PARENT}"/prereqs.sh.tmp
+fi
+rm -f "${PARENT}"/prereqs.sh.tmp
 
+if [[ "${INTERACTIVE}" = 'Y' ]]; then
+  clear
   CNODE_PATH=$(get_input "Please enter the project path" ${CNODE_PATH})
   CNODE_NAME=$(get_input "Please enter directory name" ${CNODE_NAME})
   CNODE_HOME=${CNODE_PATH}/${CNODE_NAME}
@@ -235,7 +234,7 @@ if [ "$WANT_BUILD_DEPS" = 'Y' ]; then
     echo "CentOS: curl pkgconfig libffi-devel gmp-devel openssl-devel ncurses-libs ncurses-compat-libs systemd-devel zlib-devel tmux"
     err_exit
   fi
-  if ! ghc --version | grep -q 8\.10\.2 || ! cabal --version | grep -q version\ 3; then
+  if ! ghc --version 2>/dev/null | grep -q 8\.10\.2 || ! cabal --version 2>/dev/null | grep -q version\ 3; then
     echo "Install ghcup (The Haskell Toolchain installer) .."
     # TMP: Dirty hack to prevent ghcup interactive setup, yet allow profile set up
     unset BOOTSTRAP_HASKELL_NONINTERACTIVE
@@ -248,7 +247,7 @@ if [ "$WANT_BUILD_DEPS" = 'Y' ]; then
     ghc --version
 
     echo "Installing bundled Cabal .."
-    ghcup install-cabal
+    ghcup install cabal
   fi
 fi
 
@@ -298,7 +297,7 @@ if [[ "${INSTALL_CNCLI}" = "Y" ]]; then
   pushd ./cncli >/dev/null || err_exit
   if ! output=$(git fetch --all --prune 2>&1); then echo -e "${output}" && err_exit; fi
   cncli_git_latestTag=$(git describe --tags "$(git rev-list --tags --max-count=1)")
-  if ! output=$(git checkout ${cncli_git_latestTag} 2>&1); then echo -e "${output}" && err_exit; fi
+  if ! output=$(git checkout ${cncli_git_latestTag} 2>&1 && git submodule update --init --recursive --force 2>&1); then echo -e "${output}" && err_exit; fi
   if ! versionCheck "${cncli_git_latestTag}" "${cncli_version}"; then
     [[ ${cncli_version} = "v0.0.0" ]] && echo "  latest version: ${cncli_git_latestTag}" || echo "  installed version: ${cncli_version}  |  latest version: ${cncli_git_latestTag}"
     # install rust if not available
@@ -329,7 +328,7 @@ if [[ "${INSTALL_VCHC}" = "Y" ]]; then
   pushd /tmp >/dev/null || err_exit
   rm -rf cardano-hw-cli*
   vchc_asset_url="$(curl -s https://api.github.com/repos/vacuumlabs/cardano-hw-cli/releases/latest | jq -r '.assets[].browser_download_url' | grep '_linux-x64.tar.gz')"
-  if curl -sL -m ${CURL_TIMEOUT} -o cardano-hw-cli_linux-x64.tar.gz ${vchc_asset_url}; then
+  if curl -sL -f -m ${CURL_TIMEOUT} -o cardano-hw-cli_linux-x64.tar.gz ${vchc_asset_url}; then
     tar zxf cardano-hw-cli_linux-x64.tar.gz &>/dev/null
     rm -f cardano-hw-cli_linux-x64.tar.gz
     [[ -f cardano-hw-cli/cardano-hw-cli ]] || err_exit "ERROR!! cardano-hw-cli downloaded but binary not found after extracting package!"
@@ -337,6 +336,9 @@ if [[ "${INSTALL_VCHC}" = "Y" ]]; then
     if ! versionCheck "${vchc_git_version}" "${vchc_version}"; then
       [[ ${vchc_version} = "0.0.0" ]] && echo "  latest version: ${vchc_git_version}" || echo "  installed version: ${vchc_version}  |  latest version: ${vchc_git_version}"
       mkdir -p "${HOME}"/bin
+      if [ -d "${HOME}"/bin/cardano-hw-cli ]; then
+        rm -rf "${HOME}"/bin/cardano-hw-cli 
+      fi
       pushd "${HOME}"/bin >/dev/null || err_exit
       mv -f /tmp/cardano-hw-cli .
       if ! grep -q "cardano-hw-cli" "${HOME}"/.bashrc; then
@@ -345,12 +347,12 @@ if [[ "${INSTALL_VCHC}" = "Y" ]]; then
       fi
       if [[ ! -f "/etc/udev/rules.d/20-hw1.rules" ]]; then
         # Ledger udev rules
-        curl -s -m ${CURL_TIMEOUT} https://raw.githubusercontent.com/LedgerHQ/udev-rules/master/add_udev_rules.sh | $sudo bash
+        curl -s -f -m ${CURL_TIMEOUT} https://raw.githubusercontent.com/LedgerHQ/udev-rules/master/add_udev_rules.sh | $sudo bash
         $sudo sed -e "s@TAG+=\"uaccess\"@OWNER=\"$USER\", TAG+=\"uaccess\"@g" -i /etc/udev/rules.d/20-hw1.rules
       fi
       if [[ ! -f "/etc/udev/rules.d/51-trezor.rules" ]]; then
         # Trezor udev rules
-        $sudo curl -s -m ${CURL_TIMEOUT} https://data.trezor.io/udev/51-trezor.rules -o /etc/udev/rules.d/51-trezor.rules
+        $sudo curl -s -f -m ${CURL_TIMEOUT} https://data.trezor.io/udev/51-trezor.rules -o /etc/udev/rules.d/51-trezor.rules
         $sudo sed -e "s@TAG+=\"uaccess\"@OWNER=\"$USER\", TAG+=\"uaccess\"@g" -i /etc/udev/rules.d/51-trezor.rules
       fi
       # Trigger rules update
@@ -373,7 +375,7 @@ if [[ "${INSTALL_POSTGREST}" = "Y" ]]; then
   pushd /tmp >/dev/null || err_exit
   rm -rf postgrest-v*
   pgrest_asset_url="$(curl -s https://api.github.com/repos/PostgREST/postgrest/releases/latest | jq -r '.assets[].browser_download_url' | grep 'linux-x64-static.tar.xz')"
-  if curl -sL -m ${CURL_TIMEOUT} -o postgrest-linux-x64.tar.xz ${pgrest_asset_url}; then
+  if curl -sL -f -m ${CURL_TIMEOUT} -o postgrest-linux-x64.tar.xz ${pgrest_asset_url}; then
     tar xf postgrest-linux-x64.tar.xz &>/dev/null
     rm -f postgrest-linux-x64.tar.xz
     [[ -f postgrest ]] || err_exit "ERROR!! postgrest archive downloaded but binary not found after attempting to extract package!"
@@ -399,7 +401,7 @@ $sudo chown -R "$U_ID":"$G_ID" "${CNODE_HOME}" 2>/dev/null
 echo "Downloading files..."
 
 pushd "${CNODE_HOME}"/files >/dev/null || err_exit
-curl -s -m ${CURL_TIMEOUT} -o config.json.tmp ${URL_RAW}/files/config-combinator.json 2>/dev/null
+curl -s -f -m ${CURL_TIMEOUT} -o config.json.tmp ${URL_RAW}/files/config-mainnet.json 2>/dev/null
 
 if grep -i '404: Not Found' config.json.tmp >/dev/null ; then
   err_exit "ERROR!! Specified branch could not be found! Kindly re-check the branch name and internet connection from the server"
@@ -408,29 +410,21 @@ else
 fi
 
 # Download dbsync config
-curl -sL -m ${CURL_TIMEOUT} -o dbsync.json.tmp ${URL_RAW}/files/dbsync.json
+curl -sL -f -m ${CURL_TIMEOUT} -o dbsync.json.tmp ${URL_RAW}/files/config-dbsync.json
 
 # Download node config, genesis and topology from template
-if [[ ${NETWORK} = "testnet" ]]; then
-  curl -sL -m ${CURL_TIMEOUT} -o byron-genesis.json.tmp https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/testnet-byron-genesis.json
-  curl -sL -m ${CURL_TIMEOUT} -o genesis.json.tmp https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/testnet-shelley-genesis.json
-  curl -sL -m ${CURL_TIMEOUT} -o topology.json.tmp https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/testnet-topology.json
-  curl -s -m ${CURL_TIMEOUT} -o config.json.tmp ${URL_RAW}/files/config-combinator.json
-elif [[ ${NETWORK} = "launchpad" ]]; then
-  curl -sL -m ${CURL_TIMEOUT} -o byron-genesis.json.tmp https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/launchpad-byron-genesis.json
-  curl -sL -m ${CURL_TIMEOUT} -o genesis.json.tmp https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/launchpad-shelley-genesis.json
-  curl -sL -m ${CURL_TIMEOUT} -o topology.json.tmp https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/launchpad-topology.json
-  curl -s -m ${CURL_TIMEOUT} -o config.json.tmp ${URL_RAW}/files/config-launchpad.json
-elif [[ ${NETWORK} = "guild" ]]; then
-  curl -s -m ${CURL_TIMEOUT} -o byron-genesis.json.tmp ${URL_RAW}/files/byron-genesis.json
-  curl -s -m ${CURL_TIMEOUT} -o genesis.json.tmp ${URL_RAW}/files/genesis.json
-  curl -s -m ${CURL_TIMEOUT} -o topology.json.tmp ${URL_RAW}/files/topology.json
-  curl -s -m ${CURL_TIMEOUT} -o config.json.tmp ${URL_RAW}/files/config-praos.json
+if [[ ${NETWORK} = "guild" ]]; then
+  curl -s -f -m ${CURL_TIMEOUT} -o byron-genesis.json.tmp ${URL_RAW}/files/byron-genesis-guild.json
+  curl -s -f -m ${CURL_TIMEOUT} -o genesis.json.tmp ${URL_RAW}/files/genesis-guild.json
+  curl -s -f -m ${CURL_TIMEOUT} -o topology.json.tmp ${URL_RAW}/files/topology-guild.json
+  curl -s -f -m ${CURL_TIMEOUT} -o config.json.tmp ${URL_RAW}/files/config-guild.json
+elif [[ ${NETWORK} =~ ^(mainnet|testnet|guild|staging|launchpad)$ ]]; then
+  curl -sL -f -m ${CURL_TIMEOUT} -o byron-genesis.json.tmp https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/${NETWORK}-byron-genesis.json
+  curl -sL -f -m ${CURL_TIMEOUT} -o genesis.json.tmp https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/${NETWORK}-shelley-genesis.json
+  curl -sL -f -m ${CURL_TIMEOUT} -o topology.json.tmp https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/${NETWORK}-topology.json
+  curl -s -f -m ${CURL_TIMEOUT} -o config.json.tmp ${URL_RAW}/files/config-${NETWORK}.json
 else
-  curl -sL -m ${CURL_TIMEOUT} -o byron-genesis.json.tmp https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/mainnet-byron-genesis.json
-  curl -sL -m ${CURL_TIMEOUT} -o genesis.json.tmp https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/mainnet-shelley-genesis.json
-  curl -sL -m ${CURL_TIMEOUT} -o topology.json.tmp https://hydra.iohk.io/job/Cardano/iohk-nix/cardano-deployment/latest-finished/download/1/mainnet-topology.json
-  curl -s -m ${CURL_TIMEOUT} -o config.json.tmp ${URL_RAW}/files/config-mainnet.json
+  err_exit "ERROR!! Unknown network specified! Kindly re-check the network name, valid options are: mainnet, testnet, guild, staging & launchpad"
 fi
 sed -e "s@/opt/cardano/cnode@${CNODE_HOME}@g" -i ./*.json.tmp
 [[ ${FORCE_OVERWRITE} = 'Y' && -f topology.json ]] && cp -f topology.json "topology.json_bkp$(date +%s)"
@@ -443,26 +437,26 @@ if [[ ${FORCE_OVERWRITE} = 'Y' || ! -f config.json ]]; then mv -f config.json.tm
 if [[ ${FORCE_OVERWRITE} = 'Y' || ! -f dbsync.json ]]; then mv -f dbsync.json.tmp dbsync.json; else rm -f dbsync.json.tmp; fi
 
 pushd "${CNODE_HOME}"/scripts >/dev/null || err_exit
-curl -s -m ${CURL_TIMEOUT} -o env.tmp ${URL_RAW}/scripts/cnode-helper-scripts/env
-curl -s -m ${CURL_TIMEOUT} -o createAddr.sh ${URL_RAW}/scripts/cnode-helper-scripts/createAddr.sh
-curl -s -m ${CURL_TIMEOUT} -o sendADA.sh ${URL_RAW}/scripts/cnode-helper-scripts/sendADA.sh
-curl -s -m ${CURL_TIMEOUT} -o balance.sh ${URL_RAW}/scripts/cnode-helper-scripts/balance.sh
-curl -s -m ${CURL_TIMEOUT} -o rotatePoolKeys.sh ${URL_RAW}/scripts/cnode-helper-scripts/rotatePoolKeys.sh
-curl -s -m ${CURL_TIMEOUT} -o cnode.sh.tmp ${URL_RAW}/scripts/cnode-helper-scripts/cnode.sh
-curl -s -m ${CURL_TIMEOUT} -o cntools.sh ${URL_RAW}/scripts/cnode-helper-scripts/cntools.sh
-curl -s -m ${CURL_TIMEOUT} -o cntools.config.tmp ${URL_RAW}/scripts/cnode-helper-scripts/cntools.config
-curl -s -m ${CURL_TIMEOUT} -o cntools.library ${URL_RAW}/scripts/cnode-helper-scripts/cntools.library
-curl -s -m ${CURL_TIMEOUT} -o logMonitor.sh.tmp ${URL_RAW}/scripts/cnode-helper-scripts/logMonitor.sh
-curl -s -m ${CURL_TIMEOUT} -o setup_mon.sh ${URL_RAW}/scripts/cnode-helper-scripts/setup_mon.sh
-curl -s -m ${CURL_TIMEOUT} -o topologyUpdater.sh.tmp ${URL_RAW}/scripts/cnode-helper-scripts/topologyUpdater.sh
-curl -s -m ${CURL_TIMEOUT} -o itnRewards.sh ${URL_RAW}/scripts/cnode-helper-scripts/itnRewards.sh
-curl -s -m ${CURL_TIMEOUT} -o cabal-build-all.sh ${URL_RAW}/scripts/cnode-helper-scripts/cabal-build-all.sh
-curl -s -m ${CURL_TIMEOUT} -o stack-build.sh ${URL_RAW}/scripts/cnode-helper-scripts/stack-build.sh
-curl -s -m ${CURL_TIMEOUT} -o system-info.sh ${URL_RAW}/scripts/cnode-helper-scripts/system-info.sh
-curl -s -m ${CURL_TIMEOUT} -o sLiveView.sh ${URL_RAW}/scripts/cnode-helper-scripts/sLiveView.sh
-curl -s -m ${CURL_TIMEOUT} -o gLiveView.sh.tmp ${URL_RAW}/scripts/cnode-helper-scripts/gLiveView.sh
-curl -s -m ${CURL_TIMEOUT} -o deploy-as-systemd.sh ${URL_RAW}/scripts/cnode-helper-scripts/deploy-as-systemd.sh
-curl -s -m ${CURL_TIMEOUT} -o cncli.sh.tmp ${URL_RAW}/scripts/cnode-helper-scripts/cncli.sh
+curl -s -f -m ${CURL_TIMEOUT} -o env.tmp ${URL_RAW}/scripts/cnode-helper-scripts/env
+curl -s -f -m ${CURL_TIMEOUT} -o createAddr.sh ${URL_RAW}/scripts/cnode-helper-scripts/createAddr.sh
+curl -s -f -m ${CURL_TIMEOUT} -o sendADA.sh ${URL_RAW}/scripts/cnode-helper-scripts/sendADA.sh
+curl -s -f -m ${CURL_TIMEOUT} -o balance.sh ${URL_RAW}/scripts/cnode-helper-scripts/balance.sh
+curl -s -f -m ${CURL_TIMEOUT} -o rotatePoolKeys.sh ${URL_RAW}/scripts/cnode-helper-scripts/rotatePoolKeys.sh
+curl -s -f -m ${CURL_TIMEOUT} -o cnode.sh.tmp ${URL_RAW}/scripts/cnode-helper-scripts/cnode.sh
+curl -s -f -m ${CURL_TIMEOUT} -o cntools.sh ${URL_RAW}/scripts/cnode-helper-scripts/cntools.sh
+curl -s -f -m ${CURL_TIMEOUT} -o cntools.config.tmp ${URL_RAW}/scripts/cnode-helper-scripts/cntools.config
+curl -s -f -m ${CURL_TIMEOUT} -o cntools.library ${URL_RAW}/scripts/cnode-helper-scripts/cntools.library
+curl -s -f -m ${CURL_TIMEOUT} -o logMonitor.sh.tmp ${URL_RAW}/scripts/cnode-helper-scripts/logMonitor.sh
+curl -s -f -m ${CURL_TIMEOUT} -o setup_mon.sh ${URL_RAW}/scripts/cnode-helper-scripts/setup_mon.sh
+curl -s -f -m ${CURL_TIMEOUT} -o topologyUpdater.sh.tmp ${URL_RAW}/scripts/cnode-helper-scripts/topologyUpdater.sh
+curl -s -f -m ${CURL_TIMEOUT} -o itnRewards.sh ${URL_RAW}/scripts/cnode-helper-scripts/itnRewards.sh
+curl -s -f -m ${CURL_TIMEOUT} -o cabal-build-all.sh ${URL_RAW}/scripts/cnode-helper-scripts/cabal-build-all.sh
+curl -s -f -m ${CURL_TIMEOUT} -o stack-build.sh ${URL_RAW}/scripts/cnode-helper-scripts/stack-build.sh
+curl -s -f -m ${CURL_TIMEOUT} -o system-info.sh ${URL_RAW}/scripts/cnode-helper-scripts/system-info.sh
+curl -s -f -m ${CURL_TIMEOUT} -o sLiveView.sh ${URL_RAW}/scripts/cnode-helper-scripts/sLiveView.sh
+curl -s -f -m ${CURL_TIMEOUT} -o gLiveView.sh.tmp ${URL_RAW}/scripts/cnode-helper-scripts/gLiveView.sh
+curl -s -f -m ${CURL_TIMEOUT} -o deploy-as-systemd.sh ${URL_RAW}/scripts/cnode-helper-scripts/deploy-as-systemd.sh
+curl -s -f -m ${CURL_TIMEOUT} -o cncli.sh.tmp ${URL_RAW}/scripts/cnode-helper-scripts/cncli.sh
 sed -e "s@/opt/cardano/cnode@${CNODE_HOME}@g" -e "s@CNODE_HOME@${CNODE_VNAME}_HOME@g" -i ./*.*
 
 ### Update file retaining existing custom configs

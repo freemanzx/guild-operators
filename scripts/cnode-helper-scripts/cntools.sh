@@ -6,7 +6,9 @@
 # General exit handler
 cleanup() {
   sleep 0.1
-  exec 1>&6 2>&7 3>&- 6>&- 7>&- 8>&- 9>&- # Restore stdout/stderr and close tmp file descriptors
+  if { true >&6; } 2<> /dev/null; then
+    exec 1>&6 2>&7 3>&- 6>&- 7>&- 8>&- 9>&- # Restore stdout/stderr and close tmp file descriptors
+  fi
   [[ -n $1 ]] && err=$1 || err=$?
   [[ $err -eq 0 ]] && clear
   [[ -n ${exit_msg} ]] && echo -e "\n${exit_msg}\n" || echo -e "\nCNTools terminated, cleaning up...\n"
@@ -53,44 +55,41 @@ URL_RAW="https://raw.githubusercontent.com/cardano-community/guild-operators/${B
 URL="${URL_RAW}/scripts/cnode-helper-scripts"
 URL_DOCS="${URL_RAW}/docs/Scripts"
 
+[[ ${CNTOOLS_MODE} = "CONNECTED" ]] && env_mode="" || env_mode="offline"
+
 # env version check
 if [[ ${CNTOOLS_MODE} = "CONNECTED" ]]; then
-  if curl -s -m 10 -o "${PARENT}"/env.tmp ${URL}/env 2>/dev/null && [[ -f "${PARENT}"/env.tmp ]]; then
+  if curl -s -f -m 10 -o "${PARENT}"/env.tmp ${URL}/env 2>/dev/null && [[ -f "${PARENT}"/env.tmp ]]; then
     if [[ -f "${PARENT}"/env ]]; then
       if [[ $(grep "_HOME=" "${PARENT}"/env) =~ ^#?([^[:space:]]+)_HOME ]]; then
         vname=$(tr '[:upper:]' '[:lower:]' <<< ${BASH_REMATCH[1]})
         sed -e "s@/opt/cardano/[c]node@/opt/cardano/${vname}@g" -e "s@[C]NODE_HOME@${BASH_REMATCH[1]}_HOME@g" -i "${PARENT}"/env.tmp
       else
-        myExit 1 "\nUpdate for env file failed! Please use prereqs.sh to force an update or manually download $(basename $0) + env from GitHub\n"
+        myExit 1 "Update for env file failed! Please use prereqs.sh to force an update or manually download $(basename $0) + env from GitHub"
       fi
       TEMPL_CMD=$(awk '/^# Do NOT modify/,0' "${PARENT}"/env)
       TEMPL2_CMD=$(awk '/^# Do NOT modify/,0' "${PARENT}"/env.tmp)
       if [[ "$(echo ${TEMPL_CMD} | sha256sum)" != "$(echo ${TEMPL2_CMD} | sha256sum)" ]]; then
-        echo -e "\nThe static content from env file does not match with guild-operators repository, do you want to download the updated file? [y|n]"
-        read -r -n 1 -s update
-        case ${update} in
-          [yY])
-            cp "${PARENT}"/env "${PARENT}/env_bkp$(date +%s)"
-            STATIC_CMD=$(awk '/#!/{x=1}/^# Do NOT modify/{exit} x' "${PARENT}"/env)
-            printf '%s\n%s\n' "$STATIC_CMD" "$TEMPL2_CMD" > "${PARENT}"/env.tmp
-            mv "${PARENT}"/env.tmp "${PARENT}"/env
-            echo -e "\nUpdate to env file applied successfully!\n\nPress any key to continue!"
-            read -r -n 1 -s wait
-            ;;
-          *) : ;; # ignore
-        esac
+        . "${PARENT}"/env offline &>/dev/null # source in offline mode and ignore errors to get some common functions, sourced at a later point again
+        if getAnswer "\nThe static content from env file does not match with guild-operators repository, do you want to download the updated file?"; then
+          cp "${PARENT}"/env "${PARENT}/env_bkp$(date +%s)"
+          STATIC_CMD=$(awk '/#!/{x=1}/^# Do NOT modify/{exit} x' "${PARENT}"/env)
+          printf '%s\n%s\n' "$STATIC_CMD" "$TEMPL2_CMD" > "${PARENT}"/env.tmp
+          mv "${PARENT}"/env.tmp "${PARENT}"/env
+          echo -e "\nenv update successfully applied!"
+          waitToProceed
+        fi
       fi
     else
       mv "${PARENT}"/env.tmp "${PARENT}"/env
       myExit 0 "Common env file downloaded: ${PARENT}/env\n\
-This is a mandatory prerequisite, please set variables accordingly in User Variables section in the env file and restart CNTools\n"
+This is a mandatory prerequisite, please set variables accordingly in User Variables section in the env file and restart CNTools"
     fi
   fi
   rm -f "${PARENT}"/env.tmp
 fi
-[[ ${CNTOOLS_MODE} = "CONNECTED" ]] && env_mode="" || env_mode="offline"
 if ! . "${PARENT}"/env ${env_mode}; then
-  myExit 1 "\nERROR: CNTools failed to load common env file\nPlease verify set values in 'User Variables' section in env file or log an issue on GitHub\n"
+  myExit 1 "ERROR: CNTools failed to load common env file\nPlease verify set values in 'User Variables' section in env file or log an issue on GitHub"
 fi
 
 # get cntools config parameters
@@ -141,7 +140,7 @@ if [[ ${CNTOOLS_MODE} = "CONNECTED" ]]; then
   # check to see if there are any updates available
   clear
   println "DEBUG" "CNTools version check...\n"
-  if curl -s -m ${CURL_TIMEOUT} -o "${TMP_FOLDER}"/cntools.library "${URL}/cntools.library" && [[ -f "${TMP_FOLDER}"/cntools.library ]]; then
+  if curl -s -f -m ${CURL_TIMEOUT} -o "${TMP_FOLDER}"/cntools.library "${URL}/cntools.library" && [[ -f "${TMP_FOLDER}"/cntools.library ]]; then
     GIT_MAJOR_VERSION=$(grep -r ^CNTOOLS_MAJOR_VERSION= "${TMP_FOLDER}"/cntools.library |sed -e "s#.*=##")
     GIT_MINOR_VERSION=$(grep -r ^CNTOOLS_MINOR_VERSION= "${TMP_FOLDER}"/cntools.library |sed -e "s#.*=##")
     GIT_PATCH_VERSION=$(grep -r ^CNTOOLS_PATCH_VERSION= "${TMP_FOLDER}"/cntools.library |sed -e "s#.*=##")
@@ -154,13 +153,13 @@ if [[ ${CNTOOLS_MODE} = "CONNECTED" ]]; then
     if ! versionCheck "${GIT_VERSION}" "${CNTOOLS_VERSION}"; then
       println "DEBUG" "A new version of CNTools is available"
       echo
-      println "DEBUG" "Installed Version : ${CNTOOLS_VERSION}"
+      println "DEBUG" "Installed Version : ${FG_CYAN}${CNTOOLS_VERSION}${NC}"
       println "DEBUG" "Available Version : ${FG_GREEN}${GIT_VERSION}${NC}"
       println "DEBUG" "\nGo to Update section for upgrade\n\nAlternately, follow https://cardano-community.github.io/guild-operators/#/basics?id=pre-requisites to update cntools as well alongwith any other files"
       waitForInput "press any key to proceed"
     else
       # check if CNTools was recently updated, if so show whats new
-      if curl -s -m ${CURL_TIMEOUT} -o "${TMP_FOLDER}"/cntools-changelog.md "${URL_DOCS}/cntools-changelog.md"; then
+      if curl -s -f -m ${CURL_TIMEOUT} -o "${TMP_FOLDER}"/cntools-changelog.md "${URL_DOCS}/cntools-changelog.md"; then
         if ! cmp -s "${TMP_FOLDER}"/cntools-changelog.md "${PARENT}/cntools-changelog.md"; then
           # Latest changes not shown, show whats new and copy changelog
           clear 
@@ -209,33 +208,31 @@ while IFS= read -r -d '' pool; do
       kes_rotation_needed="yes"
       println "\n** WARNING **\nPool ${FG_GREEN}$(basename ${pool})${NC} in need of KES key rotation"
       if [[ ${expiration_time_sec_diff} -lt 0 ]]; then
-        println "DEBUG" "${FG_RED}Keys expired!${NC} : ${FG_RED}$(showTimeLeft ${expiration_time_sec_diff:1})${NC} ago"
+        println "DEBUG" "${FG_RED}Keys expired!${NC} : ${FG_RED}$(timeLeft ${expiration_time_sec_diff:1})${NC} ago"
       else
         println "DEBUG" "Remaining KES periods : ${FG_RED}${remaining_kes_periods}${NC}"
-        println "DEBUG" "Time left             : ${FG_RED}$(showTimeLeft ${expiration_time_sec_diff})${NC}"
+        println "DEBUG" "Time left             : ${FG_RED}$(timeLeft ${expiration_time_sec_diff})${NC}"
       fi
     elif [[ ${expiration_time_sec_diff} -lt ${KES_WARNING_PERIOD} ]]; then
       kes_rotation_needed="yes"
       println "DEBUG" "\nPool ${FG_GREEN}$(basename ${pool})${NC} soon in need of KES key rotation"
       println "DEBUG" "Remaining KES periods : ${FG_YELLOW}${remaining_kes_periods}${NC}"
-      println "DEBUG" "Time left             : ${FG_YELLOW}$(showTimeLeft ${expiration_time_sec_diff})${NC}"
+      println "DEBUG" "Time left             : ${FG_YELLOW}$(timeLeft ${expiration_time_sec_diff})${NC}"
     fi
   fi
 done < <(find "${POOL_FOLDER}" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
 [[ ${kes_rotation_needed} = "yes" ]] && waitForInput "press any key to proceed"
 
-# Verify if the combinator network is already on shelley and if so, the epoch of transition
-if [[ "${PROTOCOL}" == "Cardano" ]]; then
-  shelleyTransitionEpoch=$(cat "${SHELLEY_TRANS_FILENAME}" 2>/dev/null)
-  if [[ -z "${shelleyTransitionEpoch}" ]]; then
-    clear
-    if [[ "${NETWORK_IDENTIFIER}" == "--mainnet" ]]; then
-      shelleyTransitionEpoch="208"
-    elif [[ ${CNTOOLS_MODE} = "CONNECTED" ]]; then
+# Verify shelley transition epoch
+if [[ -z ${SHELLEY_TRANS_EPOCH} ]]; then # unknown network
+  clear
+  SHELLEY_TRANS_EPOCH=$(cat "${SHELLEY_TRANS_FILENAME}" 2>/dev/null)
+  if [[ -z ${SHELLEY_TRANS_EPOCH} ]]; then # not yet identified
+    if [[ ${CNTOOLS_MODE} = "CONNECTED" ]]; then
       getNodeMetrics
-      epoch=$(jq '.cardano.node.ChainDB.metrics.epoch.int.val //0' <<< "${node_metrics}")
-      slot_in_epoch=$(jq '.cardano.node.ChainDB.metrics.slotInEpoch.int.val //0' <<< "${node_metrics}")
-      slot_num=$(jq '.cardano.node.ChainDB.metrics.slotNum.int.val //0' <<< "${node_metrics}")
+      epoch=$(jq '.cardano.node.metrics.epoch.int.val //0' <<< "${node_metrics}")
+      slot_in_epoch=$(jq '.cardano.node.metrics.slotInEpoch.int.val //0' <<< "${node_metrics}")
+      slot_num=$(jq '.cardano.node.metrics.slotNum.int.val //0' <<< "${node_metrics}")
       calc_slot=0
       byron_epochs=${epoch}
       shelley_epochs=0
@@ -249,15 +246,15 @@ if [[ "${PROTOCOL}" == "Cardano" ]]; then
       if [[ ${calc_slot} -ne ${slot_num} ]]; then
         myExit 1 "${FG_YELLOW}WARN${NC}: Failed to calculate shelley transition epoch\n\n${node_sync}"
       elif [[ ${shelley_epochs} -eq 0 ]]; then
-        myExit 1 "${FG_YELLOW}WARN${NC}: The network has not reached the hard fork from Byron to shelley, please wait to use CNTools until your node is in shelley era\n\n${node_sync}"
+        myExit 1 "${FG_YELLOW}WARN${NC}: The network has not reached the hard fork from Byron to shelley, please wait to use CNTools until your node is in shelley era or start it in Offline mode\n\n${node_sync}"
       else
         shelleyTransitionEpoch=${byron_epochs}
       fi
     else
-      myExit 1 "${FG_YELLOW}WARN${NC}: Offline mode enabled and config set to TestNet, please manually create and set shelley transition epoch:\nE.g. : ${FG_CYAN}echo 74 > \"${SHELLEY_TRANS_FILENAME}\"${NC}"
+      myExit 1 "${FG_YELLOW}WARN${NC}: Offline mode enabled and this is an unknown network, please manually create and set shelley transition epoch:\nE.g. : ${FG_CYAN}echo 74 > \"${SHELLEY_TRANS_FILENAME}\"${NC}"
     fi
-    echo "${shelleyTransitionEpoch}" > "${SHELLEY_TRANS_FILENAME}"
   fi
+  echo "${SHELLEY_TRANS_EPOCH}" > "${SHELLEY_TRANS_FILENAME}"
 fi
 
 ###################################################################
@@ -272,12 +269,12 @@ find "${TMP_FOLDER:?}" -type f -not \( -name 'protparams.json' -o -name '.dialog
 clear
 println "DEBUG" "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 if [[ ${CNTOOLS_MODE} = "CONNECTED" ]]; then
-  println "$(printf " >> CNTools v%s - ${FG_GREEN}%s${NC} << %$((84-20-${#CNTOOLS_VERSION}-${#CNTOOLS_MODE}))s" "${CNTOOLS_VERSION}" "${CNTOOLS_MODE}" "A Guild Operators collaboration")"
+  println "$(printf " >> CNTools v%s - %s - ${FG_GREEN}%s${NC} << %$((84-23-${#CNTOOLS_VERSION}-${#NETWORK_NAME}-${#CNTOOLS_MODE}))s" "${CNTOOLS_VERSION}" "${NETWORK_NAME}" "${CNTOOLS_MODE}" "A Guild Operators collaboration")"
 else
-  println "$(printf " >> CNTools v%s - ${FG_CYAN}%s${NC} << %$((84-20-${#CNTOOLS_VERSION}-${#CNTOOLS_MODE}))s" "${CNTOOLS_VERSION}" "${CNTOOLS_MODE}" "A Guild Operators collaboration")"
+  println "$(printf " >> CNTools v%s - %s - ${FG_CYAN}%s${NC} << %$((84-23-${#CNTOOLS_VERSION}-${#NETWORK_NAME}-${#CNTOOLS_MODE}))s" "${CNTOOLS_VERSION}" "${NETWORK_NAME}" "${CNTOOLS_MODE}" "A Guild Operators collaboration")"
 fi
 println "DEBUG" "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-println "OFF" " Main Menu\n\n"\
+println "OFF" " Main Menu    Telegram Announcement / Support channel: ${FG_CYAN}t.me/guild_operators_official${NC}\n\n"\
 " ) Wallet      - create, show, remove and protect wallets\n"\
 " ) Funds       - send, withdraw and delegate\n"\
 " ) Pool        - pool creation and management\n"\
@@ -288,11 +285,12 @@ println "OFF" " Main Menu\n\n"\
 " ) Backup      - backup & restore of wallet/pool/config\n"\
 " ) Refresh     - reload home screen content\n"\
 "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-println "DEBUG" "$(printf "%84s" "Epoch $(getEpoch) - $(timeUntilNextEpoch) until next")"
+println "DEBUG" "$(printf "%84s" "Epoch $(getEpoch) - $(timeLeft "$(timeUntilNextEpoch)") until next")"
 if [[ ${CNTOOLS_MODE} = "OFFLINE" ]]; then
   println "DEBUG" " What would you like to do?"
 else
-  tip_diff=$(getSlotTipDiff)
+  getNodeMetrics
+  tip_diff=$(( $(getSlotTipRef) - slotnum ))
   slot_interval=$(slotInterval)
   if [[ ${tip_diff} -le ${slot_interval} ]]; then
     println "DEBUG" "$(printf " What would you like to do? %$((84-29-${#tip_diff}-3))s ${FG_GREEN}%s${NC}" "Node Sync:" "${tip_diff} :)")"
@@ -508,14 +506,23 @@ EOF
 }
 EOF
       println "ACTION" "${CCLI} key verification-key --signing-key-file \"${payment_sk_file}\" --verification-key-file \"${TMP_FOLDER}/payment.evkey\""
-      ${CCLI} key verification-key --signing-key-file "${payment_sk_file}" --verification-key-file "${TMP_FOLDER}/payment.evkey"
+      if ! ${CCLI} key verification-key --signing-key-file "${payment_sk_file}" --verification-key-file "${TMP_FOLDER}/payment.evkey"; then
+        println "ERROR" "\n${FG_RED}ERROR${NC}: failure during payment signing key extraction!"; safeDel "${WALLET_FOLDER}/${wallet_name}"; waitForInput && continue
+      fi
       println "ACTION" "${CCLI} key verification-key --signing-key-file \"${stake_sk_file}\" --verification-key-file \"${TMP_FOLDER}/stake.evkey\""
-      ${CCLI} key verification-key --signing-key-file "${stake_sk_file}" --verification-key-file "${TMP_FOLDER}/stake.evkey"
+      if ! ${CCLI} key verification-key --signing-key-file "${stake_sk_file}" --verification-key-file "${TMP_FOLDER}/stake.evkey"; then
+        println "ERROR" "\n${FG_RED}ERROR${NC}: failure during stake signing key extraction!"; safeDel "${WALLET_FOLDER}/${wallet_name}"; waitForInput && continue
+      fi
 
       println "ACTION" "${CCLI} key non-extended-key --extended-verification-key-file \"${TMP_FOLDER}/payment.evkey\" --verification-key-file \"${payment_vk_file}\""
-      ${CCLI} key non-extended-key --extended-verification-key-file "${TMP_FOLDER}/payment.evkey" --verification-key-file "${payment_vk_file}"
+      if ! ${CCLI} key non-extended-key --extended-verification-key-file "${TMP_FOLDER}/payment.evkey" --verification-key-file "${payment_vk_file}"; then
+        println "ERROR" "\n${FG_RED}ERROR${NC}: failure during payment verification key extraction!"; safeDel "${WALLET_FOLDER}/${wallet_name}"; waitForInput && continue
+      fi
       println "ACTION" "${CCLI} key non-extended-key --extended-verification-key-file \"${TMP_FOLDER}/stake.evkey\" --verification-key-file \"${stake_vk_file}\""
-      ${CCLI} key non-extended-key --extended-verification-key-file "${TMP_FOLDER}/stake.evkey" --verification-key-file "${stake_vk_file}"
+      if ! ${CCLI} key non-extended-key --extended-verification-key-file "${TMP_FOLDER}/stake.evkey" --verification-key-file "${stake_vk_file}"; then
+        println "ERROR" "\n${FG_RED}ERROR${NC}: failure during stake verification key extraction!"; safeDel "${WALLET_FOLDER}/${wallet_name}"; waitForInput && continue
+      fi
+      
       chmod 700 ${WALLET_FOLDER}/${wallet_name}/*
 
       getBaseAddress ${wallet_name}
@@ -579,6 +586,7 @@ EOF
         println "ERROR" "Please run '${FG_CYAN}prereqs.sh -w${NC}' to add hardware wallet support and install Vaccumlabs cardano-hw-cli, '${FG_CYAN}prereqs.sh -h${NC}' shows all available options"
         waitForInput && continue
       fi
+      if ! HWCLIversionCheck; then waitForInput && continue; fi
       
       sleep 0.1 && read -r -p "Name of imported wallet: " wallet_name 2>&6 && println "LOG" "Name of imported wallet: ${wallet_name}"
       # Remove unwanted characters from wallet name
@@ -604,15 +612,17 @@ EOF
       stake_sk_file="${WALLET_FOLDER}/${wallet_name}/${WALLET_HW_STAKE_SK_FILENAME}"
       stake_vk_file="${WALLET_FOLDER}/${wallet_name}/${WALLET_STAKE_VK_FILENAME}"  
       
-      if ! unlockHWDevice "extract ${FG_CYAN}payment keys${NC}"; then continue; fi
-      println "ACTION" "cardano-hw-cli shelley address key-gen --path 1852H/1815H/0H/0/0 --verification-key-file \"${payment_vk_file}\" --hw-signing-file \"${payment_sk_file}\""
-      output=$(cardano-hw-cli shelley address key-gen --path 1852H/1815H/0H/0/0 --verification-key-file "${payment_vk_file}" --hw-signing-file "${payment_sk_file}" 2>&1)
-      [[ -n ${output} ]] && println "ERROR" "${output}\n${FG_RED}ERROR${NC}: failure during payment key extraction!" && waitForInput && continue
+      if ! unlockHWDevice "extract ${FG_CYAN}payment keys${NC}"; then safeDel "${WALLET_FOLDER}/${wallet_name}"; continue; fi
+      println "ACTION" "cardano-hw-cli address key-gen --path 1852H/1815H/0H/0/0 --verification-key-file \"${payment_vk_file}\" --hw-signing-file \"${payment_sk_file}\""
+      if ! cardano-hw-cli address key-gen --path 1852H/1815H/0H/0/0 --verification-key-file "${payment_vk_file}" --hw-signing-file "${payment_sk_file}"; then
+        println "ERROR" "\n${FG_RED}ERROR${NC}: failure during payment key extraction!"; safeDel "${WALLET_FOLDER}/${wallet_name}"; waitForInput && continue
+      fi
       jq '.description = "Payment Hardware Verification Key"' "${payment_vk_file}" > "${TMP_FOLDER}/$(basename "${payment_vk_file}").tmp" && mv -f "${TMP_FOLDER}/$(basename "${payment_vk_file}").tmp" "${payment_vk_file}"
       println "DEBUG" "${FG_BLUE}INFO${NC}: repeat and follow instructions on hardware device to extract the ${FG_CYAN}stake keys${NC}"
-      println "ACTION" "cardano-hw-cli shelley address key-gen --path 1852H/1815H/0H/2/0 --verification-key-file \"${stake_vk_file}\" --hw-signing-file \"${stake_sk_file}\""
-      output=$(cardano-hw-cli shelley address key-gen --path 1852H/1815H/0H/2/0 --verification-key-file "${stake_vk_file}" --hw-signing-file "${stake_sk_file}" 2>&1)
-      [[ -n ${output} ]] && println "ERROR" "${output}\n${FG_RED}ERROR${NC}: failure during stake key extraction!" && waitForInput && continue
+      println "ACTION" "cardano-hw-cli address key-gen --path 1852H/1815H/0H/2/0 --verification-key-file \"${stake_vk_file}\" --hw-signing-file \"${stake_sk_file}\""
+      if ! cardano-hw-cli address key-gen --path 1852H/1815H/0H/2/0 --verification-key-file "${stake_vk_file}" --hw-signing-file "${stake_sk_file}"; then
+        println "ERROR" "\n${FG_RED}ERROR${NC}: failure during stake key extraction!"; safeDel "${WALLET_FOLDER}/${wallet_name}"; waitForInput && continue
+      fi
       jq '.description = "Stake Hardware Verification Key"' "${stake_vk_file}" > "${TMP_FOLDER}/$(basename "${stake_vk_file}").tmp" && mv -f "${TMP_FOLDER}/$(basename "${stake_vk_file}").tmp" "${stake_vk_file}"
       
       getBaseAddress ${wallet_name}
@@ -1728,7 +1738,7 @@ EOF
 
     metadata_done=false
     meta_tmp="${TMP_FOLDER}/url_poolmeta.json"
-    if curl -sL -m ${CURL_TIMEOUT} -o "${meta_tmp}" ${meta_json_url} && jq -er . "${meta_tmp}" &>/dev/null; then
+    if curl -sL -f -m ${CURL_TIMEOUT} -o "${meta_tmp}" ${meta_json_url} && jq -er . "${meta_tmp}" &>/dev/null; then
       [[ $(wc -c <"${meta_tmp}") -gt 512 ]] && println "ERROR" "${FG_RED}ERROR${NC}: file at specified URL contain more than allowed 512b of data!" && waitForInput && continue
       echo && jq -r . "${meta_tmp}" >&3 && echo
       if ! jq -er .name "${meta_tmp}" &>/dev/null; then println "ERROR" "${FG_RED}ERROR${NC}: unable to get 'name' field from downloaded metadata file!" && waitForInput && continue; fi
@@ -2012,7 +2022,7 @@ EOF
       if ! isWalletRegistered ${wallet_name}; then
         if [[ ${op_mode} = "hybrid" ]]; then
           println "ERROR" "\n${FG_RED}ERROR${NC}: wallet ${FG_GREEN}${wallet_name}${NC} not a registered wallet on chain and CNTools run in hybrid mode"
-          println "ERROR" "Please first register all wallets to use in pool registration using 'Wallet >> Register'"
+          println "ERROR" "Please first register the main CLI wallet to use in pool registration using 'Wallet >> Register'"
           waitForInput && continue
         fi
         getBaseAddress ${wallet_name}
@@ -2028,7 +2038,7 @@ EOF
     fi
     
     if [[ ${reuse_wallets} = 'N' ]]; then
-      println "DEBUG" "Register a multi-owner pool?"
+      println "DEBUG" "Register a multi-owner pool (you need to have stake.vkey of any additional owner in a seperate wallet folder under \$CNODE_HOME/priv/wallet)?"
       while true; do
         select_opt "[n] No" "[y] Yes" "[Esc] Cancel"
         case $? in
@@ -2043,8 +2053,10 @@ EOF
                     fi ;;
                  3) println "ERROR" "${FG_RED}ERROR${NC}: payment and/or stake signing keys missing from wallet ${FG_GREEN}${wallet_name}${NC}!"
                     waitForInput "Did you mean to run in Hybrid mode?  press any key to return home!" && continue 2 ;;
-                 4) println "ERROR" "${FG_RED}ERROR${NC}: stake verification key missing from wallet ${FG_GREEN}${wallet_name}${NC}!"
-                    println "DEBUG" "Add another owner?" && continue ;;
+                 4) if [[ ! -f "${WALLET_FOLDER}/${wallet_name}/${WALLET_STAKE_VK_FILENAME}" ]]; then # ignore if payment vkey is missing
+                      println "ERROR" "${FG_RED}ERROR${NC}: stake verification key missing from wallet ${FG_GREEN}${wallet_name}${NC}!"
+                      println "DEBUG" "Add another owner?" && continue 
+                    fi ;;
                esac
              else
                println "DEBUG" "Add more owners?" && continue
@@ -2070,7 +2082,7 @@ EOF
            if ! isWalletRegistered ${reward_wallet}; then
              if [[ ${op_mode} = "hybrid" ]]; then
                println "ERROR" "\nReward wallet ${FG_GREEN}${reward_wallet}${NC} not a registered wallet on chain and CNTools run in hybrid mode"
-               println "ERROR" "Please first register all wallets to use in pool registration using 'Wallet >> Register'"
+               println "ERROR" "Please first register the reward wallet to use in pool registration using 'Wallet >> Register'"
                waitForInput && continue
              fi
              getWalletType ${reward_wallet}
@@ -2128,7 +2140,7 @@ EOF
 
     if [[ ${SUBCOMMAND} = "register" ]]; then
       if [[ ${op_mode} = "online" ]]; then
-        getCurrentKESperiod
+        current_kes_period=$(getCurrentKESperiod)
         echo "${current_kes_period}" > ${pool_saved_kes_start}
         println "ACTION" "${CCLI} node issue-op-cert --kes-verification-key-file \"${pool_hotkey_vk_file}\" --cold-signing-key-file \"${pool_coldkey_sk_file}\" --operational-certificate-issue-counter-file \"${pool_opcert_counter_file}\" --kes-period \"${current_kes_period}\" --out-file \"${pool_opcert_file}\""
         ${CCLI} node issue-op-cert --kes-verification-key-file "${pool_hotkey_vk_file}" --cold-signing-key-file "${pool_coldkey_sk_file}" --operational-certificate-issue-counter-file "${pool_opcert_counter_file}" --kes-period "${current_kes_period}" --out-file "${pool_opcert_file}"
@@ -2213,6 +2225,7 @@ EOF
 
     [[ -f "${pool_deregcert_file}" ]] && rm -f ${pool_deregcert_file} # delete de-registration cert if available
 
+    echo
     if [[ ${op_mode} = "online" ]]; then
       getBaseAddress ${owner_wallets[0]}
       if ! verifyTx ${base_addr}; then waitForInput && continue; fi
@@ -2223,7 +2236,6 @@ EOF
         println "Pool ${FG_GREEN}${pool_name}${NC} successfully updated!"
       fi
     else
-      echo
       println "Pool ${FG_GREEN}${pool_name}${NC} built!"
       println "${FG_YELLOW}Follow the steps above to sign and submit transaction!${NC}"
     fi
@@ -2426,12 +2438,12 @@ EOF
         kesExpiration "$(cat "${pool}/${POOL_CURRENT_KES_START}")"
         if [[ ${expiration_time_sec_diff} -lt ${KES_ALERT_PERIOD} ]]; then
           if [[ ${expiration_time_sec_diff} -lt 0 ]]; then
-            println "$(printf "%-21s : %s - ${FG_RED}%s${NC} %s ago" "KES expiration date" "${expiration_date}" "EXPIRED!" "$(showTimeLeft ${expiration_time_sec_diff:1})")"
+            println "$(printf "%-21s : %s - ${FG_RED}%s${NC} %s ago" "KES expiration date" "${expiration_date}" "EXPIRED!" "$(timeLeft ${expiration_time_sec_diff:1})")"
           else
-            println "$(printf "%-21s : %s - ${FG_RED}%s${NC} %s until expiration" "KES expiration date" "${expiration_date}" "ALERT!" "$(showTimeLeft ${expiration_time_sec_diff})")"
+            println "$(printf "%-21s : %s - ${FG_RED}%s${NC} %s until expiration" "KES expiration date" "${expiration_date}" "ALERT!" "$(timeLeft ${expiration_time_sec_diff})")"
           fi
         elif [[ ${expiration_time_sec_diff} -lt ${KES_WARNING_PERIOD} ]]; then
-          println "$(printf "%-21s : %s - ${FG_YELLOW}%s${NC} %s until expiration" "KES expiration date" "${expiration_date}" "WARNING!" "$(showTimeLeft ${expiration_time_sec_diff})")"
+          println "$(printf "%-21s : %s - ${FG_YELLOW}%s${NC} %s until expiration" "KES expiration date" "${expiration_date}" "WARNING!" "$(timeLeft ${expiration_time_sec_diff})")"
         else
           println "$(printf "%-21s : %s" "KES expiration date" "${expiration_date}")"
         fi
@@ -2464,8 +2476,8 @@ EOF
 
     if [[ ${CNTOOLS_MODE} = "CONNECTED" ]]; then
       tput sc && println "DEBUG" "Dumping ledger-state from node, can take a while on larger networks...\n"
-      println "ACTION" "timeout -k 5 $TIMEOUT_LEDGER_STATE ${CCLI} query ledger-state ${ERA_IDENTIFIER} ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file \"${TMP_FOLDER}\"/ledger-state.json"
-      if ! timeout -k 5 $TIMEOUT_LEDGER_STATE ${CCLI} query ledger-state ${ERA_IDENTIFIER} ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/ledger-state.json; then
+      println "ACTION" "timeout -k 5 $TIMEOUT_LEDGER_STATE ${CCLI} query ledger-state ${ERA_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file \"${TMP_FOLDER}\"/ledger-state.json"
+      if ! timeout -k 5 $TIMEOUT_LEDGER_STATE ${CCLI} query ledger-state ${ERA_IDENTIFIER} ${NETWORK_IDENTIFIER} --out-file "${TMP_FOLDER}"/ledger-state.json; then
         tput rc && tput ed
         println "ERROR" "${FG_RED}ERROR${NC}: ledger dump failed/timed out"
         println "ERROR" "increase timeout value in cntools.config"
@@ -2517,7 +2529,7 @@ EOF
       else
         meta_json_url=$(jq -r '.metadata.url //empty' <<< "${ledger_fPParams}")
       fi
-      if [[ -n ${meta_json_url} ]] && curl -sL -m ${CURL_TIMEOUT} -o "${TMP_FOLDER}/url_poolmeta.json" ${meta_json_url}; then
+      if [[ -n ${meta_json_url} ]] && curl -sL -f -m ${CURL_TIMEOUT} -o "${TMP_FOLDER}/url_poolmeta.json" ${meta_json_url}; then
         println "Metadata"
         println "$(printf "  %-19s : %s" "Name" "$(jq -r .name "$TMP_FOLDER/url_poolmeta.json")")"
         println "$(printf "  %-19s : %s" "Ticker" "$(jq -r .ticker "$TMP_FOLDER/url_poolmeta.json")")"
@@ -2635,8 +2647,8 @@ EOF
             println "$(printf "%-21s : %s" "Reward account" "${reward_account}")"
           fi
         fi
-        println "ACTION" "LC_NUMERIC=C printf \"%.10f\" \"\$(${CCLI} query stake-distribution ${ERA_IDENTIFIER} ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} | grep \"${pool_id_bech32}\" | tr -s ' ' | cut -d ' ' -f 2)\")\""
-        stake_pct=$(fractionToPCT "$(LC_NUMERIC=C printf "%.10f" "$(${CCLI} query stake-distribution ${ERA_IDENTIFIER} ${PROTOCOL_IDENTIFIER} ${NETWORK_IDENTIFIER} | grep "${pool_id_bech32}" | tr -s ' ' | cut -d ' ' -f 2)")")
+        println "ACTION" "LC_NUMERIC=C printf \"%.10f\" \"\$(${CCLI} query stake-distribution ${ERA_IDENTIFIER} ${NETWORK_IDENTIFIER} | grep \"${pool_id_bech32}\" | tr -s ' ' | cut -d ' ' -f 2)\")\""
+        stake_pct=$(fractionToPCT "$(LC_NUMERIC=C printf "%.10f" "$(${CCLI} query stake-distribution ${ERA_IDENTIFIER} ${NETWORK_IDENTIFIER} | grep "${pool_id_bech32}" | tr -s ' ' | cut -d ' ' -f 2)")")
         if validateDecimalNbr ${stake_pct}; then
           println "$(printf "%-21s : %s %%" "Stake distribution" "${stake_pct}")"
         fi
@@ -2645,12 +2657,12 @@ EOF
         kesExpiration "$(cat "${POOL_FOLDER}/${pool_name}/${POOL_CURRENT_KES_START}")"
         if [[ ${expiration_time_sec_diff} -lt ${KES_ALERT_PERIOD} ]]; then
           if [[ ${expiration_time_sec_diff} -lt 0 ]]; then
-            println "$(printf "%-21s : %s - ${FG_RED}%s${NC} %s ago" "KES expiration date" "${expiration_date}" "EXPIRED!" "$(showTimeLeft ${expiration_time_sec_diff:1})")"
+            println "$(printf "%-21s : %s - ${FG_RED}%s${NC} %s ago" "KES expiration date" "${expiration_date}" "EXPIRED!" "$(timeLeft ${expiration_time_sec_diff:1})")"
           else
-            println "$(printf "%-21s : %s - ${FG_RED}%s${NC} %s until expiration" "KES expiration date" "${expiration_date}" "ALERT!" "$(showTimeLeft ${expiration_time_sec_diff})")"
+            println "$(printf "%-21s : %s - ${FG_RED}%s${NC} %s until expiration" "KES expiration date" "${expiration_date}" "ALERT!" "$(timeLeft ${expiration_time_sec_diff})")"
           fi
         elif [[ ${expiration_time_sec_diff} -lt ${KES_WARNING_PERIOD} ]]; then
-          println "$(printf "%-21s : %s - ${FG_YELLOW}%s${NC} %s until expiration" "KES expiration date" "${expiration_date}" "WARNING!" "$(showTimeLeft ${expiration_time_sec_diff})")"
+          println "$(printf "%-21s : %s - ${FG_YELLOW}%s${NC} %s until expiration" "KES expiration date" "${expiration_date}" "WARNING!" "$(timeLeft ${expiration_time_sec_diff})")"
         else
           println "$(printf "%-21s : %s" "KES expiration date" "${expiration_date}")"
         fi
@@ -2913,11 +2925,16 @@ EOF
               waitForInput && continue 2
             fi
           else
-            println "ACTION" "${CCLI} key verification-key --signing-key-file ${file} --verification-key-file ${TMP_FOLDER}/vkey.tmp"
-            if ! ${CCLI} key verification-key --signing-key-file "${file}" --verification-key-file "${TMP_FOLDER}"/vkey.tmp; then waitForInput && continue 2; fi
-            if [[ ${otx_vkey_cborHex} != $(jq -r .cborHex "${TMP_FOLDER}"/vkey.tmp) ]]; then
+            println "ACTION" "${CCLI} key verification-key --signing-key-file ${file} --verification-key-file ${TMP_FOLDER}/tmp.vkey"
+            if ! ${CCLI} key verification-key --signing-key-file "${file}" --verification-key-file "${TMP_FOLDER}"/tmp.vkey; then waitForInput && continue 2; fi
+            if [[ $(jq -r '.type' "${file}") = *"Extended"* ]]; then
+              println "ACTION" "${CCLI} key non-extended-key --extended-verification-key-file ${TMP_FOLDER}/tmp.vkey --verification-key-file ${TMP_FOLDER}/tmp2.vkey"
+              if ! ${CCLI} key non-extended-key --extended-verification-key-file "${TMP_FOLDER}/tmp.vkey" --verification-key-file "${TMP_FOLDER}/tmp2.vkey"; then waitForInput && continue 2; fi
+              mv -f "${TMP_FOLDER}/tmp2.vkey" "${TMP_FOLDER}/tmp.vkey"
+            fi
+            if [[ ${otx_vkey_cborHex} != $(jq -r .cborHex "${TMP_FOLDER}"/tmp.vkey) ]]; then
               println "ERROR" "${FG_RED}ERROR${NC}: signing key provided doesn't match with verification key in offline transaction for: ${otx_signing_name}"
-              println "ERROR" "Provided signing key's verification cborHex: $(jq -r .cborHex "${TMP_FOLDER}"/vkey.tmp)"
+              println "ERROR" "Provided signing key's verification cborHex: $(jq -r .cborHex "${TMP_FOLDER}"/tmp.vkey)"
               println "ERROR" "Transaction verification cborHex: ${otx_vkey_cborHex}"
               waitForInput && continue 2
             fi
@@ -2944,7 +2961,6 @@ EOF
         println "DEBUG" "Pledge           : ${FG_CYAN}$(formatAda "$(jq -r '."pool-pledge"' <<< ${offlineJSON})")${NC} Ada"
         println "DEBUG" "Margin           : ${FG_CYAN}$(jq -r '."pool-margin"' <<< ${offlineJSON})${NC} %"
         println "DEBUG" "Cost             : ${FG_CYAN}$(formatAda "$(jq -r '."pool-cost"' <<< ${offlineJSON})")${NC} Ada"
-        if ! otx_witness_era="$(jq -er '."witness-era"' <<< ${offlineJSON})"; then println "ERROR" "\n${FG_RED}ERROR${NC}: field 'witness-era' not found in: ${offline_tx}" && waitForInput && continue; fi
         for otx_signing_file in $(jq -r '."signing-file"[] | @base64' <<< "${offlineJSON}"); do
           _jq() { base64 -d <<< ${otx_signing_file} | jq -r "${1}"; }
           otx_signing_name=$(_jq '.name')
@@ -2967,11 +2983,16 @@ EOF
                    waitForInput && continue 2
                  fi
                else
-                 println "ACTION" "${CCLI} key verification-key --signing-key-file ${file} --verification-key-file ${TMP_FOLDER}/vkey.tmp"
-                 if ! ${CCLI} key verification-key --signing-key-file "${file}" --verification-key-file "${TMP_FOLDER}"/vkey.tmp; then waitForInput && continue 2; fi
-                 if [[ ${otx_vkey_cborHex} != $(jq -r .cborHex "${TMP_FOLDER}"/vkey.tmp) ]]; then
+                 println "ACTION" "${CCLI} key verification-key --signing-key-file ${file} --verification-key-file ${TMP_FOLDER}/tmp.vkey"
+                 if ! ${CCLI} key verification-key --signing-key-file "${file}" --verification-key-file "${TMP_FOLDER}"/tmp.vkey; then waitForInput && continue 2; fi
+                 if [[ $(jq -r '.type' "${file}") = *"Extended"* ]]; then
+                   println "ACTION" "${CCLI} key non-extended-key --extended-verification-key-file ${TMP_FOLDER}/tmp.vkey --verification-key-file ${TMP_FOLDER}/tmp2.vkey"
+                   if ! ${CCLI} key non-extended-key --extended-verification-key-file "${TMP_FOLDER}/tmp.vkey" --verification-key-file "${TMP_FOLDER}/tmp2.vkey"; then waitForInput && continue 2; fi
+                   mv -f "${TMP_FOLDER}/tmp2.vkey" "${TMP_FOLDER}/tmp.vkey"
+                 fi
+                 if [[ ${otx_vkey_cborHex} != $(jq -r .cborHex "${TMP_FOLDER}"/tmp.vkey) ]]; then
                    println "ERROR" "${FG_RED}ERROR${NC}: signing key provided doesn't match with verification key in offline transaction for: ${otx_signing_name}"
-                   println "ERROR" "Provided signing key's verification cborHex: $(jq -r .cborHex "${TMP_FOLDER}"/vkey.tmp)"
+                   println "ERROR" "Provided signing key's verification cborHex: $(jq -r .cborHex "${TMP_FOLDER}"/tmp.vkey)"
                    println "ERROR" "Transaction verification cborHex: ${otx_vkey_cborHex}"
                    waitForInput && continue 2
                  fi
@@ -3166,7 +3187,7 @@ EOF
            println "ERROR" "${FG_RED}ERROR${NC}: invalid URL format"
            waitForInput && continue
          fi
-         if ! curl -sL -m ${CURL_TIMEOUT} -o "${metafile}" ${meta_json_url} || ! jq -er . "${metafile}" &>/dev/null; then
+         if ! curl -sL -f -m ${CURL_TIMEOUT} -o "${metafile}" ${meta_json_url} || ! jq -er . "${metafile}" &>/dev/null; then
            println "ERROR" "${FG_RED}ERROR${NC}: metadata download failed, please make sure the URL point to a valid JSON file!"
            waitForInput && continue
          fi
@@ -3491,7 +3512,7 @@ EOF
   println "DEBUG" "Full changelog available at:\nhttps://cardano-community.github.io/guild-operators/#/Scripts/cntools-changelog"
   echo
 
-  if curl -s -m ${CURL_TIMEOUT} -o "${TMP_FOLDER}"/cntools.library "${URL}/cntools.library"; then
+  if curl -s -f -m ${CURL_TIMEOUT} -o "${TMP_FOLDER}"/cntools.library "${URL}/cntools.library"; then
     GIT_MAJOR_VERSION=$(grep -r ^CNTOOLS_MAJOR_VERSION= "${TMP_FOLDER}"/cntools.library |sed -e "s#.*=##")
     GIT_MINOR_VERSION=$(grep -r ^CNTOOLS_MINOR_VERSION= "${TMP_FOLDER}"/cntools.library |sed -e "s#.*=##")
     GIT_PATCH_VERSION=$(grep -r ^CNTOOLS_PATCH_VERSION= "${TMP_FOLDER}"/cntools.library |sed -e "s#.*=##")
@@ -3522,8 +3543,8 @@ EOF
         1) continue ;; 
       esac
       println "\nApplying update..."
-      if curl -s -m ${CURL_TIMEOUT} -o "${PARENT}/cntools.sh.tmp" "${URL}/cntools.sh" &&
-         curl -s -m ${CURL_TIMEOUT} -o "${PARENT}/cntools.library.tmp" "${URL}/cntools.library" &&
+      if curl -s -f -m ${CURL_TIMEOUT} -o "${PARENT}/cntools.sh.tmp" "${URL}/cntools.sh" &&
+         curl -s -f -m ${CURL_TIMEOUT} -o "${PARENT}/cntools.library.tmp" "${URL}/cntools.library" &&
          [[ $(grep "_HOME=" "${PARENT}"/env) =~ ^#?([^[:space:]]+)_HOME ]] &&
          sed -e "s@[C]NODE_HOME@${BASH_REMATCH[1]}_HOME@g" -i "${PARENT}/cntools".*.tmp; then
         mv -f "${PARENT}/cntools.sh.tmp" "${PARENT}/cntools.sh"

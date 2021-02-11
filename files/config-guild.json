@@ -2,36 +2,37 @@
   "ApplicationName": "cardano-sl",
   "ApplicationVersion": 1,
   "ByronGenesisFile": "/opt/cardano/cnode/files/byron-genesis.json",
-  "ByronGenesisHash": "5f20df933584822601f9e3f8c024eb5eb252fe8cefb24d1317dc3d432e940ebb",
   "LastKnownBlockVersion-Alt": 0,
-  "LastKnownBlockVersion-Major": 3,
+  "LastKnownBlockVersion-Major": 4,
   "LastKnownBlockVersion-Minor": 0,
-  "MaxKnownMajorProtocolVersion": 2,
+  "TestAllegraHardForkAtEpoch": 2,
+  "TestMaryHardForkAtEpoch": 3,
+  "TestShelleyHardForkAtEpoch": 1,
   "Protocol": "Cardano",
-  "RequiresNetworkMagic": "RequiresNoMagic",
+  "RequiresNetworkMagic": "RequiresMagic",
+  "PBftSignatureThreshold": 1,
   "ShelleyGenesisFile": "/opt/cardano/cnode/files/genesis.json",
-  "ShelleyGenesisHash": "1a3be38bcbb7911969283716ad7aa550250226b76a61fc51cc9a9a35d9276d81",
-  "TraceBlockFetchClient": true,
-  "TraceBlockFetchDecisions": true,
-  "TraceBlockFetchProtocol": true,
-  "TraceBlockFetchProtocolSerialised": true,
-  "TraceBlockFetchServer": true,
+  "TraceBlockFetchClient": false,
+  "TraceBlockFetchDecisions": false,
+  "TraceBlockFetchProtocol": false,
+  "TraceBlockFetchProtocolSerialised": false,
+  "TraceBlockFetchServer": false,
   "TraceChainDb": true,
   "TraceChainSyncBlockServer": true,
-  "TraceChainSyncClient": true,
-  "TraceChainSyncHeaderServer": true,
-  "TraceChainSyncProtocol": true,
-  "TraceDNSResolver": true,
-  "TraceDNSSubscription": true,
+  "TraceChainSyncClient": false,
+  "TraceChainSyncHeaderServer": false,
+  "TraceChainSyncProtocol": false,
+  "TraceDNSResolver": false,
+  "TraceDNSSubscription": false,
   "TraceErrorPolicy": true,
   "TraceForge": true,
   "TraceHandshake": false,
-  "TraceIpSubscription": true,
-  "TraceLocalChainSyncProtocol": true,
+  "TraceIpSubscription": false,
+  "TraceLocalChainSyncProtocol": false,
   "TraceLocalErrorPolicy": true,
   "TraceLocalHandshake": false,
-  "TraceLocalTxSubmissionProtocol": true,
-  "TraceLocalTxSubmissionServer": true,
+  "TraceLocalTxSubmissionProtocol": false,
+  "TraceLocalTxSubmissionServer": false,
   "TraceMempool": true,
   "TraceMux": false,
   "TraceTxInbound": false,
@@ -47,13 +48,13 @@
   "defaultScribes": [
     [
       "FileSK",
-      "/opt/cardano/cnode/logs/node0.json"
+      "/opt/cardano/cnode/logs/node141.json"
     ]
   ],
-  "hasEKG": 12788,
+  "hasEKG": 17788,
   "hasPrometheus": [
     "127.0.0.1",
-    12798
+    17798
   ],
   "minSeverity": "Info",
   "options": {
@@ -83,7 +84,7 @@
   "setupScribes": [
     {
       "scKind": "FileSK",
-      "scName": "/opt/cardano/cnode/logs/node0.json",
+      "scName": "/opt/cardano/cnode/logs/node141.json",
       "scFormat": "ScJson",
       "scRotation": null
     }
