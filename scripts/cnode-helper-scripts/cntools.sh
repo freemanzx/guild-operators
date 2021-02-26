@@ -2710,10 +2710,17 @@ EOF
       println "DEBUG" "${pool_hotkey_sk_file}"
       println "DEBUG" "${pool_opcert_file}"
       echo
+      # Generate Checksum
+      cd ${POOL_FOLDER}/${pool_name} || exit
+      sha1sum ${POOL_HOTKEY_SK_FILENAME} ${POOL_OPCERT_FILENAME} ${POOL_VRF_SK_FILENAME} > ${POOL_FOLDER}/${pool_name}/checksum_${pool_name}.sum
+      cd ${PARENT} || exit
+      # Copy files
       mkdir -p ${KES_DIR}/${pool_name}
       cp -v ${pool_hotkey_sk_file} ${KES_DIR}/${pool_name}/
       cp -v ${pool_opcert_file} ${KES_DIR}/${pool_name}/
       cp -v ${POOL_FOLDER}/${pool_name}/${POOL_VRF_SK_FILENAME} ${KES_DIR}/${pool_name}/
+      cp -v ${POOL_FOLDER}/${pool_name}/${POOL_VRF_VK_FILENAME} ${KES_DIR}/${pool_name}/
+      cp -v ${POOL_FOLDER}/${pool_name}/checksum_${pool_name}.sum ${KES_DIR}/${pool_name}/
     fi
     println "DEBUG" "Restart your pool node for changes to take effect"
 
