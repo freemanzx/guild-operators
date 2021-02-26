@@ -3333,7 +3333,7 @@ EOF
          current_epoch=$(getEpoch)
          println "DEBUG" "Current epoch: ${FG_CYAN}${current_epoch}${NC}\tPool Name: ${FG_CYAN}${POOL_NAME}${NC}\n"
          if [[ ${view} -eq 1 ]]; then
-           [[ $(sqlite3 "${BLOCKLOG_DB}" "SELECT EXISTS(SELECT 1 FROM blocklog WHERE epoch=$((current_epoch+1)) LIMIT 1);" 2>/dev/null) -eq 1 ]] && ((current_epoch++))
+           [[ $(sqlite3 "${BLOCKLOG_DB}" "SELECT EXISTS(SELECT 1 FROM epochdata WHERE epoch=$((current_epoch+1)) LIMIT 1);" 2>/dev/null) -eq 1 ]] && ((current_epoch++))
            first_epoch=$(( current_epoch - epoch_enter ))
            [[ ${first_epoch} -lt 0 ]] && first_epoch=0
            
