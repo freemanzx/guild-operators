@@ -808,13 +808,13 @@ EOF
       if [[ ${CNTOOLS_MODE} = "CONNECTED" ]] && isWalletRegistered ${wallet_name}; then registered="yes"; else registered="no"; fi
       echo
       if [[ ${enc_files} -gt 0 && ${registered} = "yes" ]]; then
-        println "${FG_GREEN}${wallet_name}${NC} - ${FG_CYAN}REGISTERED${NC} (${FG_YELLOW}encrypted${NC})"
+        println NO_NEW_LINE "${FG_GREEN}${wallet_name}${NC} ${FG_CYAN}REG${NC} (${FG_YELLOW}enc${NC})"
       elif [[ ${registered} = "yes" ]]; then
-        println "${FG_GREEN}${wallet_name}${NC} - ${FG_CYAN}REGISTERED${NC}"
+        println NO_NEW_LINE "${FG_GREEN}${wallet_name}${NC} ${FG_CYAN}REG${NC}"
       elif [[ ${enc_files} -gt 0 ]]; then
-        println "${FG_GREEN}${wallet_name}${NC} (${FG_YELLOW}encrypted${NC})"
+        println NO_NEW_LINE "${FG_GREEN}${wallet_name}${NC} (${FG_YELLOW}enc${NC})"
       else
-        println "${FG_GREEN}${wallet_name}${NC}"
+        println NO_NEW_LINE "${FG_GREEN}${wallet_name}${NC}"
       fi
       getBaseAddress ${wallet_name}
       getPayAddress ${wallet_name}
@@ -824,8 +824,8 @@ EOF
       else
         if [[ -n ${base_addr} ]]; then
           getBalance ${base_addr}
-          println "$(printf "%-19s : %s" "Address"  "${base_addr}")"
-          println "$(printf "%-19s : ${FG_CYAN}%s${NC} Ada" "Funds"  "$(formatLovelace ${lovelace})")"
+          println "$(printf " - %-7s : %s" "Address"  "${base_addr}")"
+          println NO_NEW_LINE "$(printf "%-7s : ${FG_CYAN}%s${NC} Ada" "Funds"  "$(formatLovelace ${lovelace})")"
         fi
         if [[ -n ${pay_addr} ]]; then
           getBalance ${pay_addr}
@@ -841,7 +841,7 @@ EOF
         fi
         getRewards ${wallet_name}
         if [[ "${reward_lovelace}" -ge 0 ]]; then
-          println "$(printf "%-19s : ${FG_CYAN}%s${NC} Ada" "Rewards" "$(formatLovelace ${reward_lovelace})")"
+          println NO_NEW_LINE "$(printf ",  %-7s : ${FG_CYAN}%s${NC} Ada" "Rewards" "$(formatLovelace ${reward_lovelace})")"
           delegation_pool_id=$(jq -r '.[0].delegation // empty' <<< "${stake_address_info}")
           if [[ -n ${delegation_pool_id} ]]; then
             unset poolName
@@ -851,10 +851,11 @@ EOF
                 poolName=$(basename ${pool}) && break
               fi
             done < <(find "${POOL_FOLDER}" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
-            println "${FG_RED}Delegated to${NC} ${FG_GREEN}${poolName}${NC} ${FG_RED}(${delegation_pool_id})${NC}"
+            println NO_NEW_LINE ",  ${FG_RED}Delegated to ${NC}${FG_GREEN}${poolName}${NC} ${FG_RED}(${delegation_pool_id})${NC}"
           fi
         fi
       fi
+      println ""
     done < <(find "${WALLET_FOLDER}" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
 
     waitForInput && continue

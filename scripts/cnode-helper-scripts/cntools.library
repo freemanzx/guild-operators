@@ -60,7 +60,7 @@ logln() {
 #                             ERROR  : stderr output and error messages
 #             : message    >  The message to print/log
 println() {  
-  sleep 0.05 # hack, sleep 50ms before each print to preserve order of execution
+  sleep 0.002 # hack, sleep 2ms before each print to preserve order of execution
   local log_level=$1
   shift
   case $log_level in
@@ -70,6 +70,7 @@ println() {
     INFO) printf '%b\n' "$@" ;;
     ACTION) logln "ACTION" "$@" ;;
     ERROR) printf '%b\n' "$@" >&2 ;;
+    NO_NEW_LINE) printf '%b' "$@" ;;
     *) printf '%b\n' "${log_level}"; [[ $# -ge 1 ]] && printf '%s\n' "$@" ;;
   esac
 }
